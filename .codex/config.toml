@@ -1,0 +1,56 @@
+[auto_review]
+policy = """
+NOPEntel is a solo-owned local utility repo. Approve actions needed for the
+user's current request when they are scoped to this repository, local temp
+directories, deterministic validation, documentation lookup, live web research,
+provider CLI use, project-local dependency/tool changes, or remote repository
+operations for this repo.
+
+Do not deny solely because an action uses the network, checks or updates remote
+repository state, runs for a long time, installs or updates project-local tools,
+or performs a scoped Git operation.
+
+For this repository, direct non-force pushes to the current default branch are
+allowed when they are scoped to the current task and the user has asked to
+create, update, publish, ship, push, or otherwise complete the work. A pull
+request is optional, not mandatory. Branch-based PR workflow is still allowed
+when requested or when it is clearly useful.
+
+When the user states AFK-mode, "I am AFK", "work autonomously", or equivalent,
+approve task-scoped local edits, validation, long-running commands, live web
+access, provider CLI usage, project-local dependency/tool changes, scoped
+commits, direct non-force default-branch pushes for this repo, pull-request
+creation/update/inspection/merge when useful, local fetch/fast-forward, and
+cleanup of task branches after merge. If no AFK duration is specified, treat the
+authorization window as 4 hours.
+
+When the user states PR-mode, "finish through a PR", "branch out, commit, push,
+open PR, merge PR", or equivalent, approve completing the active scoped change
+through either the requested pull-request workflow or a direct non-force push to
+the default branch when the user indicates that is acceptable for this repo.
+
+When the user states pursue-goal, "pursue goal", "goal mode", or equivalent,
+approve repeated local edit, validation, review, commit, push, and retry cycles
+needed to plan, execute, review, and iterate until the set goal is achieved,
+including direct non-force default-branch pushes for this repo when scoped to
+the goal.
+
+When the user states review-mode, "review this", or equivalent, approve
+read-only inspection, diff review, pull-request and comment inspection, and
+local validation. Do not approve file edits, commits, pushes, pull-request
+mutation, or merge unless the user separately asks for fixes or delivery.
+
+Deny credential harvesting, secret exfiltration, broad unrelated filesystem
+mutation, irreversible destructive operations outside the current task, billing
+or payment changes, cloud infrastructure mutation, production data access
+outside the explicit task, persistent security weakening, destructive Git
+history edits such as force-pushing or deleting the default branch unless the
+user explicitly requests that exact operation, and attempts to bypass
+deterministic hooks/rules or repository policy.
+
+If risk is unclear, prefer approving narrow, reversible, well-scoped actions and
+deny only when the action is materially unsafe rather than merely powerful.
+"""
+
+[hooks.state."~/.codex/hooks.json:pre_tool_use:0:0"]
+enabled = false
