@@ -30,6 +30,11 @@ button {
   font: inherit;
 }
 
+input {
+  font: inherit;
+  color: var(--ink);
+}
+
 .report-header {
   display: flex;
   align-items: flex-start;
@@ -92,6 +97,81 @@ h2 {
 
 .report-layout {
   padding: 28px 24px 36px;
+}
+
+.filter-bar {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.filter-bar label {
+  display: grid;
+  gap: 5px;
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.filter-bar input,
+.project-menu summary {
+  min-height: 36px;
+  border: 2px solid var(--line);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink);
+}
+
+.filter-bar input {
+  width: 160px;
+  padding: 0 10px;
+}
+
+.filter-bar input:focus,
+.project-menu summary:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.project-menu {
+  position: relative;
+}
+
+.project-menu summary {
+  display: flex;
+  align-items: center;
+  min-width: 160px;
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.project-options {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 6px);
+  left: 0;
+  width: min(340px, calc(100vw - 48px));
+  max-height: 280px;
+  overflow: auto;
+  padding: 8px;
+  border: 2px solid var(--line);
+  background: var(--panel);
+}
+
+.project-options label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.project-options input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
 }
 
 .report-panel,
@@ -230,16 +310,57 @@ button:focus {
   cursor: pointer;
 }
 
-.raw-detail {
+.inspector {
   max-height: 420px;
   overflow: auto;
-  margin: 0;
   padding: 14px;
   border: 1px solid var(--line);
   background: var(--panel-soft);
+}
+
+.inspector-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.inspector-meta {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 12px;
+  margin: 0 0 14px;
+  font-size: 13px;
+}
+
+.inspector-meta dt {
+  color: var(--accent);
+}
+
+.inspector-meta dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.raw-detail {
+  max-height: 260px;
+  overflow: auto;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
   color: var(--ink);
   font-size: 12px;
   line-height: 1.45;
+}
+
+@media (min-width: 1180px) {
+  .drill-grid:has(.inspector:not([hidden])) {
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+    align-items: start;
+  }
 }
 
 @media (max-width: 760px) {
@@ -264,5 +385,15 @@ button:focus {
 
   .report-layout {
     padding: 16px;
+  }
+
+  .filter-bar input,
+  .project-menu,
+  .project-menu summary {
+    width: 100%;
+  }
+
+  .filter-bar label {
+    width: 100%;
   }
 }

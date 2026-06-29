@@ -1,8 +1,16 @@
+const HIDDEN_PROJECTS_KEY = "nopentel.hiddenProjects";
+
 const state = {
   report: null,
   selectedKey: null,
   selectedCallId: null,
   details: new Map(),
+  callsById: new Map(),
+  hiddenProjects: new Set(loadHiddenProjects()),
+  filters: {
+    from: "",
+    to: "",
+  },
   lastSseAt: null,
   sourceOnline: false,
   refreshTimer: null,
@@ -11,18 +19,42 @@ const state = {
 const els = {
   liveDot: document.querySelector("#liveDot"),
   liveLabel: document.querySelector("#liveLabel"),
+  fromDate: document.querySelector("#fromDate"),
+  toDate: document.querySelector("#toDate"),
+  clearDates: document.querySelector("#clearDates"),
+  projectMenu: document.querySelector("#projectMenu"),
+  projectMenuLabel: document.querySelector("#projectMenuLabel"),
+  projectOptions: document.querySelector("#projectOptions"),
   reportRows: document.querySelector("#reportRows"),
   drilldown: document.querySelector("#drilldown"),
   drillTitle: document.querySelector("#drillTitle"),
   clearDrill: document.querySelector("#clearDrill"),
   drillRows: document.querySelector("#drillRows"),
+  inspector: document.querySelector("#inspector"),
+  inspectorTitle: document.querySelector("#inspectorTitle"),
+  inspectorMeta: document.querySelector("#inspectorMeta"),
+  closeInspector: document.querySelector("#closeInspector"),
   rawDetail: document.querySelector("#rawDetail"),
 };
 
 const serviceLabels = new Map([
   ["codex_exec", "Codex"],
+  ["codex_cli_rs", "Codex"],
   ["claude-code", "Claude Code"],
 ]);
+
+function loadHiddenProjects() {
+  try {
+    const values = JSON.parse(localStorage.getItem(HIDDEN_PROJECTS_KEY) || "[]");
+    return Array.isArray(values) ? values : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHiddenProjects() {
+  localStorage.setItem(HIDDEN_PROJECTS_KEY, JSON.stringify([...state.hiddenProjects]));
+}
 
 function fmtNumber(value) {
   return new Intl.NumberFormat().format(Number(value || 0));
@@ -45,10 +77,11 @@ function serviceLabel(value) {
 }
 
 function displayedTokenTotal(row) {
+  const cacheRead = row.cache_read_display_tokens ?? row.cached_tokens;
   return Number(row.input_tokens || 0)
     + Number(row.output_tokens || 0)
     + Number(row.cache_write_tokens || 0)
-    + Number(row.cached_tokens || 0);
+    + Number(cacheRead || 0);
 }
 
 function setConnection(status, label) {
@@ -71,28 +104,132 @@ function makeNumberCell(value) {
   return makeCell(fmtNumber(value), "num");
 }
 
+function makeMetaTerm(text) {
+  const dt = document.createElement("dt");
+  dt.textContent = text;
+  return dt;
+}
+
+function makeMetaValue(text) {
+  const dd = document.createElement("dd");
+  dd.textContent = text || "n/a";
+  return dd;
+}
+
 function modelList(models) {
   return models.map((model) => `- ${model.model}`).join("\n");
 }
 
+function projectNames(report) {
+  return [...new Set((report?.groups || []).map((group) => group.project_name))].sort((a, b) =>
+    a.localeCompare(b),
+  );
+}
+
+function visibleGroups(report) {
+  return (report?.groups || []).filter((group) => !state.hiddenProjects.has(group.project_name));
+}
+
+function visibleTotals(groups) {
+  return groups.reduce(
+    (totals, group) => {
+      for (const field of [
+        "calls",
+        "input_tokens",
+        "output_tokens",
+        "cache_write_tokens",
+        "cached_tokens",
+        "reasoning_tokens",
+        "tool_tokens",
+        "duration_ms",
+        "total_tokens",
+      ]) {
+        totals[field] += Number(group[field] || 0);
+      }
+      totals.cost_usd += Number(group.cost_usd || 0);
+      return totals;
+    },
+    {
+      calls: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_write_tokens: 0,
+      cached_tokens: 0,
+      reasoning_tokens: 0,
+      tool_tokens: 0,
+      duration_ms: 0,
+      cost_usd: 0,
+      total_tokens: 0,
+    },
+  );
+}
+
+function selectedKeyVisible(groups) {
+  if (!state.selectedKey) return true;
+  return groups.some((group) => {
+    if (rowKey(group.day, group.project_name) === state.selectedKey) return true;
+    return group.models.some((model) => rowKey(group.day, group.project_name, model.model) === state.selectedKey);
+  });
+}
+
+function updateProjectMenu(report) {
+  const projects = projectNames(report);
+  els.projectOptions.replaceChildren();
+
+  for (const project of projects) {
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = !state.hiddenProjects.has(project);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) {
+        state.hiddenProjects.delete(project);
+      } else {
+        state.hiddenProjects.add(project);
+      }
+      saveHiddenProjects();
+      renderReport(state.report);
+    });
+    label.append(checkbox, document.createTextNode(project));
+    els.projectOptions.append(label);
+  }
+
+  const visibleCount = projects.filter((project) => !state.hiddenProjects.has(project)).length;
+  els.projectMenuLabel.textContent = `Projects ${visibleCount}/${projects.length}`;
+}
+
+function clearSelection(rerender = true) {
+  state.selectedKey = null;
+  state.selectedCallId = null;
+  state.callsById.clear();
+  els.drilldown.hidden = true;
+  els.inspector.hidden = true;
+  els.rawDetail.textContent = "";
+  els.inspectorMeta.replaceChildren();
+  if (rerender && state.report) renderReport(state.report);
+}
+
 function renderReport(report) {
   state.report = report;
+  updateProjectMenu(report);
+  const groups = visibleGroups(report);
+
+  if (!selectedKeyVisible(groups)) {
+    clearSelection(false);
+  }
+
   els.reportRows.replaceChildren();
 
-  if (!report.groups.length) {
+  if (!groups.length) {
     const tr = document.createElement("tr");
-    tr.append(makeCell("No token usage yet"));
-    tr.append(makeCell(""));
-    tr.append(makeNumberCell(0));
-    tr.append(makeNumberCell(0));
-    tr.append(makeNumberCell(0));
-    tr.append(makeNumberCell(0));
-    tr.append(makeNumberCell(0));
+    const td = makeCell("No matching token usage");
+    td.colSpan = 7;
+    tr.append(td);
     els.reportRows.append(tr);
     return;
   }
 
-  for (const group of report.groups) {
+  for (const group of groups) {
     const projectRow = document.createElement("tr");
     projectRow.className = "project-row";
     const projectCell = makeCell(`Project: ${group.project_name}`);
@@ -136,7 +273,7 @@ function renderReport(report) {
     }
   }
 
-  const total = report.totals;
+  const total = visibleTotals(groups);
   const totalRow = document.createElement("tr");
   totalRow.className = "total-row";
   totalRow.append(
@@ -156,8 +293,9 @@ async function selectReportGroup(group, model = null) {
   state.selectedKey = key;
   state.selectedCallId = null;
   renderReport(state.report);
-  els.rawDetail.hidden = true;
+  els.inspector.hidden = true;
   els.rawDetail.textContent = "";
+  els.inspectorMeta.replaceChildren();
   els.drilldown.hidden = false;
   els.drillTitle.textContent = model
     ? `${group.day} / ${group.project_name} / ${model.model}`
@@ -185,6 +323,7 @@ function makeLoadingRow() {
 
 function renderCalls(calls) {
   els.drillRows.replaceChildren();
+  state.callsById = new Map(calls.map((call) => [call.id, call]));
   if (!calls.length) {
     const tr = document.createElement("tr");
     const td = makeCell("No matching calls");
@@ -207,8 +346,8 @@ function renderCalls(calls) {
       makeNumberCell(call.input_tokens),
       makeNumberCell(call.output_tokens),
       makeNumberCell(call.cache_write_tokens),
-      makeNumberCell(call.cached_tokens),
-      makeNumberCell(displayedTokenTotal(call)),
+      makeNumberCell(call.cache_read_display_tokens ?? call.cached_tokens),
+      makeNumberCell(call.display_total_tokens ?? displayedTokenTotal(call)),
     );
     tr.addEventListener("click", () => selectCall(call.id));
     tr.addEventListener("keydown", (event) => {
@@ -226,21 +365,83 @@ async function selectCall(id) {
   for (const row of els.drillRows.querySelectorAll("tr")) {
     row.classList.toggle("selected", Number(row.dataset.id) === id);
   }
-  els.rawDetail.hidden = false;
-  els.rawDetail.textContent = "Loading...";
+  const base = state.callsById.get(id) || {};
+  renderInspector(base, true);
   if (state.details.has(id)) {
-    els.rawDetail.textContent = JSON.stringify(state.details.get(id), null, 2);
+    renderInspector(state.details.get(id));
     return;
   }
   const response = await fetch(`/api/event?id=${encodeURIComponent(id)}`, { cache: "no-store" });
   if (!response.ok) throw new Error(`detail failed: ${response.status}`);
   const payload = await response.json();
-  state.details.set(id, payload.event);
-  els.rawDetail.textContent = JSON.stringify(payload.event, null, 2);
+  const detail = {
+    ...payload.event,
+    cache_read_display_tokens: base.cache_read_display_tokens ?? payload.event.cached_tokens,
+    cache_read_raw_tokens: base.cache_read_raw_tokens ?? payload.event.cached_tokens,
+    display_total_tokens: base.display_total_tokens ?? displayedTokenTotal(base),
+  };
+  state.details.set(id, detail);
+  renderInspector(detail);
+}
+
+function renderInspector(event, loading = false) {
+  els.inspector.hidden = false;
+  els.inspectorTitle.textContent = event.id ? `Request ${event.id}` : "Request";
+  els.inspectorMeta.replaceChildren(
+    makeMetaTerm("Time"),
+    makeMetaValue(fmtTime(event.observed_at)),
+    makeMetaTerm("Source"),
+    makeMetaValue(serviceLabel(event.service_name)),
+    makeMetaTerm("Project"),
+    makeMetaValue(event.project_name),
+    makeMetaTerm("Model"),
+    makeMetaValue(event.model),
+    makeMetaTerm("Event"),
+    makeMetaValue(event.event_name),
+    makeMetaTerm("Request ID"),
+    makeMetaValue(event.request_id),
+    makeMetaTerm("Session ID"),
+    makeMetaValue(event.session_id),
+    makeMetaTerm("Prompt ID"),
+    makeMetaValue(event.prompt_id),
+    makeMetaTerm("Conversation"),
+    makeMetaValue(event.short_conversation_id || event.conversation_id),
+    makeMetaTerm("Input"),
+    makeMetaValue(fmtNumber(event.input_tokens)),
+    makeMetaTerm("Output"),
+    makeMetaValue(fmtNumber(event.output_tokens)),
+    makeMetaTerm("Cache Create"),
+    makeMetaValue(fmtNumber(event.cache_write_tokens)),
+    makeMetaTerm("Cache Read Raw"),
+    makeMetaValue(fmtNumber(event.cache_read_raw_tokens ?? event.cached_tokens)),
+    makeMetaTerm("Cache Read Delta"),
+    makeMetaValue(fmtNumber(event.cache_read_display_tokens ?? event.cached_tokens)),
+    makeMetaTerm("Duration"),
+    makeMetaValue(event.duration_ms ? `${fmtNumber(event.duration_ms)} ms` : "n/a"),
+  );
+  els.rawDetail.textContent = loading ? "Loading..." : JSON.stringify(detailForDisplay(event), null, 2);
+}
+
+function detailForDisplay(event) {
+  const detail = { ...event };
+  if (detail.raw_json) {
+    try {
+      detail.raw = JSON.parse(detail.raw_json);
+      delete detail.raw_json;
+    } catch {
+      detail.raw = detail.raw_json;
+      delete detail.raw_json;
+    }
+  }
+  return detail;
 }
 
 async function loadReport() {
-  const response = await fetch("/api/report", { cache: "no-store" });
+  const params = new URLSearchParams();
+  if (state.filters.from) params.set("from", state.filters.from);
+  if (state.filters.to) params.set("to", state.filters.to);
+  const query = params.toString();
+  const response = await fetch(`/api/report${query ? `?${query}` : ""}`, { cache: "no-store" });
   if (!response.ok) throw new Error(`report failed: ${response.status}`);
   const payload = await response.json();
   for (const service of payload.summary?.known_services || []) {
@@ -290,13 +491,35 @@ function connectEvents() {
   }, 5000);
 }
 
-els.clearDrill.addEventListener("click", () => {
-  state.selectedKey = null;
+function reloadForFilters() {
+  state.filters.from = els.fromDate.value;
+  state.filters.to = els.toDate.value;
+  clearSelection(false);
+  loadReport().catch((error) => {
+    console.error(error);
+    setConnection("stale", "Report failed");
+  });
+}
+
+els.clearDrill.addEventListener("click", () => clearSelection());
+
+els.closeInspector.addEventListener("click", () => {
   state.selectedCallId = null;
-  els.drilldown.hidden = true;
-  els.rawDetail.hidden = true;
+  els.inspector.hidden = true;
   els.rawDetail.textContent = "";
-  if (state.report) renderReport(state.report);
+  els.inspectorMeta.replaceChildren();
+  for (const row of els.drillRows.querySelectorAll("tr")) {
+    row.classList.remove("selected");
+  }
+});
+
+els.fromDate.addEventListener("change", reloadForFilters);
+els.toDate.addEventListener("change", reloadForFilters);
+
+els.clearDates.addEventListener("click", () => {
+  els.fromDate.value = "";
+  els.toDate.value = "";
+  reloadForFilters();
 });
 
 loadReport()

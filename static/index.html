@@ -18,6 +18,22 @@
     </header>
 
     <main class="report-layout">
+      <section class="filter-bar" aria-label="Report filters">
+        <label>
+          <span>From</span>
+          <input id="fromDate" type="date" />
+        </label>
+        <label>
+          <span>To</span>
+          <input id="toDate" type="date" />
+        </label>
+        <button id="clearDates" type="button">All</button>
+        <details id="projectMenu" class="project-menu">
+          <summary id="projectMenuLabel">Projects</summary>
+          <div id="projectOptions" class="project-options"></div>
+        </details>
+      </section>
+
       <section class="report-panel" aria-label="Daily token usage report">
         <table class="usage-report">
           <thead>
@@ -53,14 +69,21 @@
                   <th scope="col">Input</th>
                   <th scope="col">Output</th>
                   <th scope="col">Cache Create</th>
-                  <th scope="col">Cache Read</th>
-                  <th scope="col">Total</th>
+                  <th scope="col">Cache Read Δ</th>
+                  <th scope="col">Total Δ</th>
                 </tr>
               </thead>
               <tbody id="drillRows"></tbody>
             </table>
           </div>
-          <pre id="rawDetail" class="raw-detail" hidden></pre>
+          <aside id="inspector" class="inspector" hidden>
+            <div class="inspector-heading">
+              <h2 id="inspectorTitle">Request</h2>
+              <button id="closeInspector" type="button">Close</button>
+            </div>
+            <dl id="inspectorMeta" class="inspector-meta"></dl>
+            <pre id="rawDetail" class="raw-detail"></pre>
+          </aside>
         </div>
       </section>
     </main>

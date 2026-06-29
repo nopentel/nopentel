@@ -94,6 +94,10 @@ CREATE TABLE IF NOT EXISTS events (
   model TEXT,
   tool_name TEXT,
   conversation_id TEXT,
+  session_id TEXT,
+  prompt_id TEXT,
+  request_id TEXT,
+  event_sequence INTEGER,
   duration_ms INTEGER,
   success TEXT,
   endpoint TEXT,
@@ -124,6 +128,10 @@ EVENT_COLUMN_MIGRATIONS = {
     "tool_name": "ALTER TABLE events ADD COLUMN tool_name TEXT",
     "cache_write_tokens": "ALTER TABLE events ADD COLUMN cache_write_tokens INTEGER",
     "cost_usd": "ALTER TABLE events ADD COLUMN cost_usd REAL",
+    "session_id": "ALTER TABLE events ADD COLUMN session_id TEXT",
+    "prompt_id": "ALTER TABLE events ADD COLUMN prompt_id TEXT",
+    "request_id": "ALTER TABLE events ADD COLUMN request_id TEXT",
+    "event_sequence": "ALTER TABLE events ADD COLUMN event_sequence INTEGER",
 }
 
 
@@ -426,6 +434,10 @@ def flatten_payload(line: str, line_no: int) -> list[dict[str, Any]]:
                         "model": string_or_none(record_attrs.get("model") or record_attrs.get("slug")),
                         "tool_name": string_or_none(first_attr(record_attrs, TOOL_NAME_KEYS)),
                         "conversation_id": string_or_none(record_attrs.get("conversation.id")),
+                        "session_id": string_or_none(record_attrs.get("session.id")),
+                        "prompt_id": string_or_none(record_attrs.get("prompt.id")),
+                        "request_id": string_or_none(record_attrs.get("request_id")),
+                        "event_sequence": int_or_none(record_attrs.get("event.sequence")),
                         "duration_ms": int_or_none(record_attrs.get("duration_ms")),
                         "success": string_or_none(record_attrs.get("success")),
                         "endpoint": string_or_none(record_attrs.get("endpoint")),
@@ -503,6 +515,55 @@ def backfill_codex_projects(db_path: pathlib.Path) -> int:
     return updated
 
 
+def attrs_from_stored_raw(raw_json: str | None) -> dict[str, Any]:
+    if not raw_json:
+        return {}
+    with contextlib.suppress(json.JSONDecodeError, AttributeError):
+        raw = json.loads(raw_json)
+        return attrs_to_dict(raw.get("record", {}).get("attributes", []))
+    return {}
+
+
+def backfill_event_metadata(db_path: pathlib.Path) -> int:
+    updated = 0
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, session_id, prompt_id, request_id, event_sequence, raw_json
+            FROM events
+            WHERE session_id IS NULL
+               OR prompt_id IS NULL
+               OR request_id IS NULL
+               OR event_sequence IS NULL
+            """
+        ).fetchall()
+        for row in rows:
+            attrs = attrs_from_stored_raw(row["raw_json"])
+            session_id = row["session_id"] or string_or_none(attrs.get("session.id"))
+            prompt_id = row["prompt_id"] or string_or_none(attrs.get("prompt.id"))
+            request_id = row["request_id"] or string_or_none(attrs.get("request_id"))
+            event_sequence = row["event_sequence"] or int_or_none(attrs.get("event.sequence"))
+            if (
+                row["session_id"] == session_id
+                and row["prompt_id"] == prompt_id
+                and row["request_id"] == request_id
+                and row["event_sequence"] == event_sequence
+            ):
+                continue
+            conn.execute(
+                """
+                UPDATE events
+                SET session_id = ?, prompt_id = ?, request_id = ?, event_sequence = ?
+                WHERE id = ?
+                """,
+                (session_id, prompt_id, request_id, event_sequence, row["id"]),
+            )
+            updated += 1
+        conn.commit()
+    return updated
+
+
 def event_row_to_dict(row: sqlite3.Row, include_raw: bool = False) -> dict[str, Any]:
     event = dict(row)
     if not include_raw:
@@ -511,6 +572,13 @@ def event_row_to_dict(row: sqlite3.Row, include_raw: bool = False) -> dict[str, 
         event["conversation_id"][:8] if event.get("conversation_id") else None
     )
     event["total_tokens"] = token_total(event)
+    if "cache_read_display_tokens" in event:
+        event["display_total_tokens"] = (
+            (int_or_none(event.get("input_tokens")) or 0)
+            + (int_or_none(event.get("output_tokens")) or 0)
+            + (int_or_none(event.get("cache_write_tokens")) or 0)
+            + (int_or_none(event.get("cache_read_display_tokens")) or 0)
+        )
     return event
 
 
@@ -642,6 +710,10 @@ class OTelTailer(threading.Thread):
                 event["model"],
                 event["tool_name"],
                 event["conversation_id"],
+                event["session_id"],
+                event["prompt_id"],
+                event["request_id"],
+                event["event_sequence"],
                 event["duration_ms"],
                 event["success"],
                 event["endpoint"],
@@ -659,10 +731,11 @@ class OTelTailer(threading.Thread):
                 INSERT OR IGNORE INTO events (
                   event_hash, observed_ns, observed_at, received_at, event_name, event_kind,
                   service_name, project_name, project_path, model, tool_name, conversation_id,
+                  session_id, prompt_id, request_id, event_sequence,
                   duration_ms, success, endpoint, input_tokens, cached_tokens, cache_write_tokens,
                   output_tokens, reasoning_tokens, tool_tokens, cost_usd,
                   raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 values,
             )
@@ -861,8 +934,23 @@ def make_report_row(row: sqlite3.Row) -> dict[str, Any]:
     return item
 
 
-def query_usage_report(conn: sqlite3.Connection) -> dict[str, Any]:
+def query_usage_report(
+    conn: sqlite3.Connection,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> dict[str, Any]:
     token_expr = token_total_sql()
+    clauses = [
+        "observed_at IS NOT NULL",
+        f"(({token_expr}) > 0 OR COALESCE(tool_tokens, 0) > 0)",
+    ]
+    params: list[Any] = []
+    if date_from:
+        clauses.append("substr(observed_at, 1, 10) >= ?")
+        params.append(date_from)
+    if date_to:
+        clauses.append("substr(observed_at, 1, 10) <= ?")
+        params.append(date_to)
     rows = conn.execute(
         f"""
         SELECT
@@ -880,11 +968,11 @@ def query_usage_report(conn: sqlite3.Connection) -> dict[str, Any]:
           COALESCE(SUM(duration_ms), 0) AS duration_ms,
           COALESCE(SUM(cost_usd), 0.0) AS cost_usd
         FROM events
-        WHERE observed_at IS NOT NULL
-          AND (({token_expr}) > 0 OR COALESCE(tool_tokens, 0) > 0)
+        WHERE {" AND ".join(clauses)}
         GROUP BY day, project_name, model
         ORDER BY day DESC, project_name ASC
-        """
+        """,
+        params,
     ).fetchall()
 
     groups_by_key: dict[tuple[str, str], dict[str, Any]] = {}
@@ -977,7 +1065,52 @@ def query_report_calls(
     params.append(limit)
     rows = conn.execute(
         f"""
-        SELECT * FROM events
+        WITH eligible AS (
+          SELECT *
+          FROM events
+          WHERE ({token_expr}) > 0 OR COALESCE(tool_tokens, 0) > 0
+        ),
+        measured AS (
+          SELECT
+            eligible.*,
+            (
+              SELECT prev.cached_tokens
+              FROM eligible AS prev
+              WHERE prev.service_name = eligible.service_name
+                AND COALESCE(prev.session_id, '') = COALESCE(eligible.session_id, '')
+                AND COALESCE(prev.project_path, prev.project_name, '') =
+                  COALESCE(eligible.project_path, eligible.project_name, '')
+                AND COALESCE(prev.model, '') = COALESCE(eligible.model, '')
+                AND prev.cached_tokens IS NOT NULL
+                AND prev.cached_tokens > 0
+                AND (
+                  COALESCE(prev.observed_ns, 0) < COALESCE(eligible.observed_ns, 0)
+                  OR (
+                    COALESCE(prev.observed_ns, 0) = COALESCE(eligible.observed_ns, 0)
+                    AND prev.id < eligible.id
+                  )
+                )
+              ORDER BY COALESCE(prev.observed_ns, 0) DESC, prev.id DESC
+              LIMIT 1
+            ) AS previous_cached_tokens
+          FROM eligible
+        )
+        SELECT
+          measured.*,
+          cached_tokens AS cache_read_raw_tokens,
+          CASE
+            WHEN service_name = 'claude-code'
+              AND event_name = 'api_request'
+              AND cached_tokens IS NOT NULL
+            THEN
+              CASE
+                WHEN previous_cached_tokens IS NULL THEN cached_tokens
+                WHEN cached_tokens >= previous_cached_tokens THEN cached_tokens - previous_cached_tokens
+                ELSE cached_tokens
+              END
+            ELSE cached_tokens
+          END AS cache_read_display_tokens
+        FROM measured
         WHERE {" AND ".join(clauses)}
         ORDER BY COALESCE(observed_ns, 0) DESC, id DESC
         LIMIT ?
@@ -1138,7 +1271,7 @@ class Handler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/calls":
             self.respond_json(self.make_calls_response())
         elif parsed.path == "/api/report":
-            self.respond_json(self.make_report_response())
+            self.respond_json(self.make_report_response(parsed))
         elif parsed.path == "/api/report/calls":
             self.respond_json(self.make_report_calls_response(parsed))
         elif parsed.path == "/api/event":
@@ -1163,11 +1296,16 @@ class Handler(BaseHTTPRequestHandler):
                 "usage": query_usage_breakdowns(conn),
             }
 
-    def make_report_response(self) -> dict[str, Any]:
+    def make_report_response(self, parsed: urllib.parse.ParseResult) -> dict[str, Any]:
+        params = urllib.parse.parse_qs(parsed.query)
         with sqlite3.connect(self.server.db_path) as conn:
             conn.row_factory = sqlite3.Row
             return {
-                "report": query_usage_report(conn),
+                "report": query_usage_report(
+                    conn,
+                    params.get("from", [None])[0],
+                    params.get("to", [None])[0],
+                ),
                 "summary": make_summary(self.server.db_path, self.server.tailer.status()),
             }
 
@@ -1265,6 +1403,7 @@ def main() -> int:
     source_path = args.source.expanduser()
     db_path = args.db.expanduser()
     init_db(db_path)
+    metadata_backfilled = backfill_event_metadata(db_path)
     backfilled = backfill_codex_projects(db_path)
     hub = EventHub()
     tailer = OTelTailer(source_path, db_path, hub)
@@ -1288,6 +1427,8 @@ def main() -> int:
     print(f"NOPEntel: http://{args.host}:{args.port}")
     print(f"Source: {source_path}")
     print(f"SQLite: {db_path}")
+    if metadata_backfilled:
+        print(f"Backfilled request metadata for {metadata_backfilled} events")
     if backfilled:
         print(f"Backfilled Codex project attribution for {backfilled} events")
     try:
