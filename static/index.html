@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NOPEntel Token Usage</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="report-header">
+      <div class="title-box">
+        <h1>NOPEntel Token Usage Report - Daily</h1>
+      </div>
+      <div class="status">
+        <span id="liveDot" class="dot dot-waiting"></span>
+        <span id="liveLabel">Connecting</span>
+      </div>
+    </header>
+
+    <main class="report-layout">
+      <section class="report-panel" aria-label="Daily token usage report">
+        <table class="usage-report">
+          <thead>
+            <tr>
+              <th scope="col">Date</th>
+              <th scope="col">Models</th>
+              <th scope="col">Input</th>
+              <th scope="col">Output</th>
+              <th scope="col">Cache Create</th>
+              <th scope="col">Cache Read</th>
+              <th scope="col">Total Tokens</th>
+            </tr>
+          </thead>
+          <tbody id="reportRows"></tbody>
+        </table>
+      </section>
+
+      <section id="drilldown" class="drilldown" aria-label="Selected usage detail" hidden>
+        <div class="drill-heading">
+          <h2 id="drillTitle">Selected Usage</h2>
+          <button id="clearDrill" type="button">Clear</button>
+        </div>
+        <div class="drill-grid">
+          <div class="drill-table-wrap">
+            <table class="calls-table">
+              <thead>
+                <tr>
+                  <th scope="col">Time</th>
+                  <th scope="col">Source</th>
+                  <th scope="col">Project</th>
+                  <th scope="col">Model</th>
+                  <th scope="col">Event</th>
+                  <th scope="col">Input</th>
+                  <th scope="col">Output</th>
+                  <th scope="col">Cache Create</th>
+                  <th scope="col">Cache Read</th>
+                  <th scope="col">Total</th>
+                </tr>
+              </thead>
+              <tbody id="drillRows"></tbody>
+            </table>
+          </div>
+          <pre id="rawDetail" class="raw-detail" hidden></pre>
+        </div>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
