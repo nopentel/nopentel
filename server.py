@@ -26,8 +26,10 @@ DEFAULT_SOURCE = pathlib.Path.home() / ".codex" / "otel" / "logs" / "codex-otel.
 DEFAULT_DB = APP_ROOT / "data" / "nopentel.sqlite"
 CLAUDE_PROJECTS_ROOT = pathlib.Path.home() / ".claude" / "projects"
 CODEX_SESSIONS_ROOT = pathlib.Path.home() / ".codex" / "sessions"
+CODEX_SERVICE_NAMES = {"codex_exec", "codex_cli_rs"}
 KNOWN_SERVICES = {
     "codex_exec": "Codex",
+    "codex_cli_rs": "Codex",
     "claude-code": "Claude Code",
 }
 TOKEN_FIELDS = (
@@ -139,6 +141,21 @@ def ns_to_iso(value: Any) -> str | None:
     ).replace("+00:00", "Z")
 
 
+def iso_to_ns(value: Any) -> int | None:
+    text = string_or_none(value)
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = dt.datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.UTC)
+    return int(parsed.timestamp() * 1_000_000_000)
+
+
 def int_or_none(value: Any) -> int | None:
     if value is None or value == "":
         return None
@@ -196,20 +213,22 @@ def first_attr(attrs: dict[str, Any], keys: tuple[str, ...]) -> Any:
 class LocalProjectLookup:
     def __init__(self) -> None:
         self._cache: dict[tuple[str, str], tuple[str | None, str | None]] = {}
+        self._codex_context_cache: dict[str, tuple[int, list[tuple[int, str]]]] = {}
 
     def lookup(
         self,
         service_name: str | None,
         session_id: str | None,
         conversation_id: str | None,
+        observed_ns: int | None = None,
     ) -> tuple[str | None, str | None]:
+        if service_name in CODEX_SERVICE_NAMES:
+            return self._lookup_codex(conversation_id, observed_ns)
         key = (service_name or "", session_id or conversation_id or "")
         if key in self._cache:
             return self._cache[key]
         if service_name == "claude-code":
             result = self._lookup_claude(session_id)
-        elif service_name == "codex_exec":
-            result = self._lookup_codex(conversation_id)
         else:
             result = (None, None)
         self._cache[key] = result
@@ -224,11 +243,15 @@ class LocalProjectLookup:
                 return (pathlib.PurePath(cwd).name, cwd)
         return (None, None)
 
-    def _lookup_codex(self, conversation_id: str | None) -> tuple[str | None, str | None]:
+    def _lookup_codex(
+        self,
+        conversation_id: str | None,
+        observed_ns: int | None,
+    ) -> tuple[str | None, str | None]:
         if not conversation_id or not CODEX_SESSIONS_ROOT.exists():
             return (None, None)
         for path in CODEX_SESSIONS_ROOT.glob(f"**/*{conversation_id}.jsonl"):
-            cwd = self._read_codex_session_cwd(path)
+            cwd = self._codex_cwd_at(path, conversation_id, observed_ns)
             if cwd:
                 return (pathlib.PurePath(cwd).name, cwd)
         return (None, None)
@@ -248,16 +271,61 @@ class LocalProjectLookup:
             return None
         return None
 
-    def _read_codex_session_cwd(self, path: pathlib.Path) -> str | None:
+    def _codex_cwd_at(
+        self,
+        path: pathlib.Path,
+        conversation_id: str,
+        observed_ns: int | None,
+    ) -> str | None:
         try:
-            with path.open("r", encoding="utf-8") as handle:
-                line = handle.readline()
+            mtime_ns = path.stat().st_mtime_ns
         except OSError:
             return None
-        with contextlib.suppress(json.JSONDecodeError):
-            payload = json.loads(line).get("payload", {})
-            return string_or_none(payload.get("cwd"))
-        return None
+
+        cached = self._codex_context_cache.get(conversation_id)
+        if cached and cached[0] == mtime_ns:
+            contexts = cached[1]
+        else:
+            contexts = self._read_codex_session_contexts(path)
+            self._codex_context_cache[conversation_id] = (mtime_ns, contexts)
+
+        if not contexts:
+            return None
+        if observed_ns is None:
+            return contexts[-1][1]
+
+        selected = None
+        for context_ns, cwd in contexts:
+            if context_ns <= observed_ns:
+                selected = cwd
+            elif selected:
+                break
+        return selected or contexts[0][1]
+
+    def _read_codex_session_contexts(self, path: pathlib.Path) -> list[tuple[int, str]]:
+        contexts: list[tuple[int, str]] = []
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    with contextlib.suppress(json.JSONDecodeError):
+                        item = json.loads(line)
+                        payload = item.get("payload", {})
+                        event_type = item.get("type")
+                        if event_type == "session_meta":
+                            cwd = string_or_none(payload.get("cwd"))
+                            timestamp = payload.get("timestamp") or item.get("timestamp")
+                        elif event_type == "turn_context":
+                            cwd = string_or_none(payload.get("cwd"))
+                            timestamp = item.get("timestamp")
+                        else:
+                            continue
+                        timestamp_ns = iso_to_ns(timestamp)
+                        if cwd and timestamp_ns is not None:
+                            contexts.append((timestamp_ns, cwd))
+        except OSError:
+            return []
+        contexts.sort(key=lambda item: item[0])
+        return contexts
 
 
 PROJECT_LOOKUP = LocalProjectLookup()
@@ -267,6 +335,7 @@ def project_from_attrs(
     attrs: dict[str, Any],
     resource_attrs: dict[str, Any],
     service_name: str | None,
+    observed_ns: int | None,
 ) -> tuple[str | None, str | None]:
     merged = {**resource_attrs, **attrs}
     project_name = string_or_none(first_attr(merged, PROJECT_NAME_KEYS))
@@ -278,6 +347,7 @@ def project_from_attrs(
             service_name,
             string_or_none(attrs.get("session.id")),
             string_or_none(attrs.get("conversation.id")),
+            observed_ns,
         )
     return project_name, project_path
 
@@ -309,12 +379,13 @@ def flatten_payload(line: str, line_no: int) -> list[dict[str, Any]]:
             scope = scope_log.get("scope", {})
             for record_idx, record in enumerate(scope_log.get("logRecords", [])):
                 record_attrs = attrs_to_dict(record.get("attributes", []))
+                observed_ns = int_or_none(record.get("observedTimeUnixNano"))
                 project_name, project_path = project_from_attrs(
                     record_attrs,
                     resource_attrs,
                     service_name,
+                    observed_ns,
                 )
-                observed_ns = int_or_none(record.get("observedTimeUnixNano"))
                 event_name = (
                     string_or_none(record_attrs.get("event.name"))
                     or string_or_none(record.get("eventName"))
@@ -334,7 +405,7 @@ def flatten_payload(line: str, line_no: int) -> list[dict[str, Any]]:
                     record_attrs.get("cache_creation_tokens")
                     or record_attrs.get("cache_write_tokens")
                 )
-                if service_name == "codex_exec" and input_tokens is not None and cached_tokens:
+                if service_name in CODEX_SERVICE_NAMES and input_tokens is not None and cached_tokens:
                     input_tokens = max(input_tokens - cached_tokens, 0)
                 raw = {
                     "resource": resource_attrs,
@@ -390,6 +461,46 @@ def init_db(db_path: pathlib.Path) -> None:
             CREATE INDEX IF NOT EXISTS idx_events_tool_name ON events(tool_name);
             """
         )
+
+
+def backfill_codex_projects(db_path: pathlib.Path) -> int:
+    services = tuple(sorted(CODEX_SERVICE_NAMES))
+    placeholders = ",".join("?" for _ in services)
+    updated = 0
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            f"""
+            SELECT id, service_name, project_name, project_path, conversation_id, observed_ns
+            FROM events
+            WHERE service_name IN ({placeholders})
+              AND conversation_id IS NOT NULL
+              AND conversation_id != ''
+            """,
+            services,
+        ).fetchall()
+        for row in rows:
+            project_name, project_path = PROJECT_LOOKUP.lookup(
+                row["service_name"],
+                None,
+                row["conversation_id"],
+                row["observed_ns"],
+            )
+            if not project_name and not project_path:
+                continue
+            if row["project_name"] == project_name and row["project_path"] == project_path:
+                continue
+            conn.execute(
+                """
+                UPDATE events
+                SET project_name = ?, project_path = ?
+                WHERE id = ?
+                """,
+                (project_name, project_path, row["id"]),
+            )
+            updated += 1
+        conn.commit()
+    return updated
 
 
 def event_row_to_dict(row: sqlite3.Row, include_raw: bool = False) -> dict[str, Any]:
@@ -1151,12 +1262,15 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    init_db(args.db)
+    source_path = args.source.expanduser()
+    db_path = args.db.expanduser()
+    init_db(db_path)
+    backfilled = backfill_codex_projects(db_path)
     hub = EventHub()
-    tailer = OTelTailer(args.source.expanduser(), args.db.expanduser(), hub)
+    tailer = OTelTailer(source_path, db_path, hub)
     tailer.start()
 
-    httpd = DashboardServer((args.host, args.port), Handler, args.db.expanduser(), tailer, hub)
+    httpd = DashboardServer((args.host, args.port), Handler, db_path, tailer, hub)
 
     shutdown_started = threading.Event()
 
@@ -1172,8 +1286,10 @@ def main() -> int:
     signal.signal(signal.SIGTERM, handle_signal)
 
     print(f"NOPEntel: http://{args.host}:{args.port}")
-    print(f"Source: {args.source.expanduser()}")
-    print(f"SQLite: {args.db.expanduser()}")
+    print(f"Source: {source_path}")
+    print(f"SQLite: {db_path}")
+    if backfilled:
+        print(f"Backfilled Codex project attribution for {backfilled} events")
     try:
         httpd.serve_forever()
     finally:
