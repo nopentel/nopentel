@@ -30,6 +30,8 @@ CODEX_SERVICE_NAMES = {"codex_exec", "codex_cli_rs", "codex-app-server"}
 CODEX_APP_SERVER_SERVICE = "codex-app-server"
 CODEX_DESKTOP_ORIGINATOR = "Codex_Desktop"
 CODEX_APP_CHAT_PROJECT = "Codex App Chat"
+CODEX_AUTO_REVIEW_MODEL = "codex-auto-review"
+CODEX_AUTO_REVIEW_PROJECT = "Codex Auto Review"
 KNOWN_SERVICES = {
     "codex_exec": "Codex",
     "codex_cli_rs": "Codex",
@@ -389,6 +391,8 @@ def derived_project_context(
         and string_or_none(attrs.get("originator")) == CODEX_DESKTOP_ORIGINATOR
     ):
         return (CODEX_APP_CHAT_PROJECT, None)
+    if string_or_none(attrs.get("model") or attrs.get("slug")) == CODEX_AUTO_REVIEW_MODEL:
+        return (CODEX_AUTO_REVIEW_PROJECT, None)
     return (None, None)
 
 

@@ -46,4 +46,6 @@ Defaults:
   click-through object detail view.
 - Codex Desktop chats that have no project/cwd session metadata are shown as
   `Codex App Chat` instead of `(unknown project)`.
+- Codex auto-review child sessions that have no project/cwd session metadata
+  are shown as `Codex Auto Review`.
 - This is a local operational tool, not an authenticated multi-user service.
