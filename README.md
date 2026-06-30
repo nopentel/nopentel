@@ -9,6 +9,8 @@ and streams updates to the browser with Server-Sent Events.
 The current known local producers are:
 
 - `codex_exec` as Codex
+- `codex_cli_rs` as Codex
+- `codex-app-server` as Codex / Codex Desktop
 - `claude-code` as Claude Code
 
 ## Run
@@ -42,4 +44,6 @@ Defaults:
   telemetry object and fetches it only when you click a specific event or call.
 - Prompt, response, and tool payloads are intentionally inspectable in the
   click-through object detail view.
+- Codex Desktop chats that have no project/cwd session metadata are shown as
+  `Codex App Chat` instead of `(unknown project)`.
 - This is a local operational tool, not an authenticated multi-user service.

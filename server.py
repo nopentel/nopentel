@@ -26,11 +26,18 @@ DEFAULT_SOURCE = pathlib.Path.home() / ".codex" / "otel" / "logs" / "codex-otel.
 DEFAULT_DB = APP_ROOT / "data" / "nopentel.sqlite"
 CLAUDE_PROJECTS_ROOT = pathlib.Path.home() / ".claude" / "projects"
 CODEX_SESSIONS_ROOT = pathlib.Path.home() / ".codex" / "sessions"
-CODEX_SERVICE_NAMES = {"codex_exec", "codex_cli_rs"}
+CODEX_SERVICE_NAMES = {"codex_exec", "codex_cli_rs", "codex-app-server"}
+CODEX_APP_SERVER_SERVICE = "codex-app-server"
+CODEX_DESKTOP_ORIGINATOR = "Codex_Desktop"
+CODEX_APP_CHAT_PROJECT = "Codex App Chat"
 KNOWN_SERVICES = {
     "codex_exec": "Codex",
     "codex_cli_rs": "Codex",
+    CODEX_APP_SERVER_SERVICE: "Codex",
     "claude-code": "Claude Code",
+}
+PROJECT_ALIASES = {
+    "user-level-fixes": ("nopentel", str(APP_ROOT)),
 }
 TOKEN_FIELDS = (
     "input_tokens",
@@ -351,13 +358,38 @@ def project_from_attrs(
     if not project_name and project_path:
         project_name = pathlib.PurePath(project_path).name or project_path
     if not project_name and not project_path:
-        return PROJECT_LOOKUP.lookup(
-            service_name,
-            string_or_none(attrs.get("session.id")),
-            string_or_none(attrs.get("conversation.id")),
-            observed_ns,
+        project_name, project_path = normalize_project(
+            *PROJECT_LOOKUP.lookup(
+                service_name,
+                string_or_none(attrs.get("session.id")),
+                string_or_none(attrs.get("conversation.id")),
+                observed_ns,
+            )
         )
+        if project_name or project_path:
+            return project_name, project_path
+        return derived_project_context(service_name, attrs)
+    if project_name in PROJECT_ALIASES:
+        return PROJECT_ALIASES[project_name]
     return project_name, project_path
+
+
+def normalize_project(project_name: str | None, project_path: str | None) -> tuple[str | None, str | None]:
+    if project_name in PROJECT_ALIASES:
+        return PROJECT_ALIASES[project_name]
+    return project_name, project_path
+
+
+def derived_project_context(
+    service_name: str | None,
+    attrs: dict[str, Any],
+) -> tuple[str | None, str | None]:
+    if (
+        service_name == CODEX_APP_SERVER_SERVICE
+        and string_or_none(attrs.get("originator")) == CODEX_DESKTOP_ORIGINATOR
+    ):
+        return (CODEX_APP_CHAT_PROJECT, None)
+    return (None, None)
 
 
 def cost_usd_from_attrs(attrs: dict[str, Any]) -> float | None:
@@ -483,7 +515,7 @@ def backfill_codex_projects(db_path: pathlib.Path) -> int:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             f"""
-            SELECT id, service_name, project_name, project_path, conversation_id, observed_ns
+            SELECT id, service_name, project_name, project_path, conversation_id, observed_ns, raw_json
             FROM events
             WHERE service_name IN ({placeholders})
               AND conversation_id IS NOT NULL
@@ -498,8 +530,14 @@ def backfill_codex_projects(db_path: pathlib.Path) -> int:
                 row["conversation_id"],
                 row["observed_ns"],
             )
+            project_name, project_path = normalize_project(project_name, project_path)
             if not project_name and not project_path:
-                continue
+                project_name, project_path = derived_project_context(
+                    row["service_name"],
+                    attrs_from_stored_raw(row["raw_json"]),
+                )
+                if not project_name and not project_path:
+                    continue
             if row["project_name"] == project_name and row["project_path"] == project_path:
                 continue
             conn.execute(
@@ -511,6 +549,23 @@ def backfill_codex_projects(db_path: pathlib.Path) -> int:
                 (project_name, project_path, row["id"]),
             )
             updated += 1
+        conn.commit()
+    return updated
+
+
+def migrate_project_aliases(db_path: pathlib.Path) -> int:
+    updated = 0
+    with sqlite3.connect(db_path) as conn:
+        for old_project, (project_name, project_path) in PROJECT_ALIASES.items():
+            cursor = conn.execute(
+                """
+                UPDATE events
+                SET project_name = ?, project_path = ?
+                WHERE project_name = ?
+                """,
+                (project_name, project_path, old_project),
+            )
+            updated += cursor.rowcount
         conn.commit()
     return updated
 
@@ -1405,6 +1460,7 @@ def main() -> int:
     init_db(db_path)
     metadata_backfilled = backfill_event_metadata(db_path)
     backfilled = backfill_codex_projects(db_path)
+    aliased = migrate_project_aliases(db_path)
     hub = EventHub()
     tailer = OTelTailer(source_path, db_path, hub)
     tailer.start()
@@ -1431,6 +1487,8 @@ def main() -> int:
         print(f"Backfilled request metadata for {metadata_backfilled} events")
     if backfilled:
         print(f"Backfilled Codex project attribution for {backfilled} events")
+    if aliased:
+        print(f"Migrated project aliases for {aliased} events")
     try:
         httpd.serve_forever()
     finally:
