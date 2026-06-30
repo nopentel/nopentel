@@ -32,6 +32,7 @@ CODEX_DESKTOP_ORIGINATOR = "Codex_Desktop"
 CODEX_APP_CHAT_PROJECT = "Codex App Chat"
 CODEX_AUTO_REVIEW_MODEL = "codex-auto-review"
 CODEX_AUTO_REVIEW_PROJECT = "Codex Auto Review"
+DERIVED_PROJECT_NAMES = (CODEX_APP_CHAT_PROJECT, CODEX_AUTO_REVIEW_PROJECT)
 KNOWN_SERVICES = {
     "codex_exec": "Codex",
     "codex_cli_rs": "Codex",
@@ -574,6 +575,67 @@ def migrate_project_aliases(db_path: pathlib.Path) -> int:
     return updated
 
 
+def is_concrete_project(project_name: str | None) -> bool:
+    return bool(project_name) and project_name not in DERIVED_PROJECT_NAMES
+
+
+def backfill_conversation_projects(db_path: pathlib.Path) -> int:
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        updated = backfill_conversation_projects_conn(conn)
+        conn.commit()
+    return updated
+
+
+def backfill_conversation_projects_conn(conn: sqlite3.Connection) -> int:
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """
+        SELECT service_name, conversation_id, project_name, project_path
+        FROM events
+        WHERE conversation_id IS NOT NULL
+          AND conversation_id != ''
+          AND project_name IS NOT NULL
+          AND project_name != ''
+        """
+    ).fetchall()
+
+    candidates: dict[tuple[str, str], dict[str, set[str]]] = {}
+    for row in rows:
+        project_name = string_or_none(row["project_name"])
+        if not is_concrete_project(project_name):
+            continue
+        key = (string_or_none(row["service_name"]) or "", row["conversation_id"])
+        candidate = candidates.setdefault(key, {"names": set(), "paths": set()})
+        candidate["names"].add(project_name)
+        project_path = string_or_none(row["project_path"])
+        if project_path:
+            candidate["paths"].add(project_path)
+
+    updated = 0
+    for (service_name, conversation_id), candidate in candidates.items():
+        if len(candidate["names"]) != 1 or len(candidate["paths"]) > 1:
+            continue
+        project_name = next(iter(candidate["names"]))
+        project_path = next(iter(candidate["paths"])) if candidate["paths"] else None
+        cursor = conn.execute(
+            f"""
+            UPDATE events
+            SET project_name = ?, project_path = ?
+            WHERE COALESCE(service_name, '') = ?
+              AND conversation_id = ?
+              AND (
+                project_name IS NULL
+                OR project_name = ''
+                OR project_name IN ({",".join("?" for _ in DERIVED_PROJECT_NAMES)})
+              )
+            """,
+            (project_name, project_path, service_name, conversation_id, *DERIVED_PROJECT_NAMES),
+        )
+        updated += cursor.rowcount
+    return updated
+
+
 def attrs_from_stored_raw(raw_json: str | None) -> dict[str, Any]:
     if not raw_json:
         return {}
@@ -809,6 +871,10 @@ class OTelTailer(threading.Thread):
         conn.commit()
 
         if inserted_events:
+            if any(event.get("conversation_id") for event in inserted_events):
+                conversation_updates = backfill_conversation_projects_conn(conn)
+                if conversation_updates:
+                    conn.commit()
             inserted_count = len(inserted_events)
             status = self.status()
             self.set_status(
@@ -1465,6 +1531,7 @@ def main() -> int:
     metadata_backfilled = backfill_event_metadata(db_path)
     backfilled = backfill_codex_projects(db_path)
     aliased = migrate_project_aliases(db_path)
+    conversation_backfilled = backfill_conversation_projects(db_path)
     hub = EventHub()
     tailer = OTelTailer(source_path, db_path, hub)
     tailer.start()
@@ -1493,6 +1560,8 @@ def main() -> int:
         print(f"Backfilled Codex project attribution for {backfilled} events")
     if aliased:
         print(f"Migrated project aliases for {aliased} events")
+    if conversation_backfilled:
+        print(f"Backfilled conversation project attribution for {conversation_backfilled} events")
     try:
         httpd.serve_forever()
     finally:

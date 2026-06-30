@@ -48,4 +48,6 @@ Defaults:
   `Codex App Chat` instead of `(unknown project)`.
 - Codex auto-review child sessions that have no project/cwd session metadata
   are shown as `Codex Auto Review`.
+- When later events in the same `conversation.id` resolve to a concrete
+  project, that project is propagated back over earlier derived labels.
 - This is a local operational tool, not an authenticated multi-user service.
