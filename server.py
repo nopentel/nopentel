@@ -86,11 +86,109 @@ CALL_EVENT_NAMES = {
     "codex.sse_event",
     "codex.websocket_request",
 }
+CODEX_EVENT_COLUMNS = (
+    "event_hash",
+    "observed_ns",
+    "observed_at",
+    "received_at",
+    "event_name",
+    "event_kind",
+    "service_name",
+    "project_name",
+    "project_path",
+    "model",
+    "slug",
+    "tool_name",
+    "conversation_id",
+    "originator",
+    "app_version",
+    "auth_mode",
+    "call_id",
+    "duration_ms",
+    "success",
+    "endpoint",
+    "input_tokens",
+    "cached_tokens",
+    "output_tokens",
+    "reasoning_tokens",
+    "tool_tokens",
+    "raw_json",
+)
+CLAUDE_EVENT_COLUMNS = (
+    "event_hash",
+    "observed_ns",
+    "observed_at",
+    "received_at",
+    "event_name",
+    "event_kind",
+    "service_name",
+    "project_name",
+    "project_path",
+    "model",
+    "tool_name",
+    "tool_use_id",
+    "mcp_tool_name",
+    "mcp_server_name",
+    "session_id",
+    "prompt_id",
+    "request_id",
+    "event_sequence",
+    "duration_ms",
+    "success",
+    "endpoint",
+    "input_tokens",
+    "cached_tokens",
+    "cache_write_tokens",
+    "output_tokens",
+    "reasoning_tokens",
+    "tool_tokens",
+    "cost_usd",
+    "speed",
+    "prompt_length",
+    "response_length",
+    "raw_json",
+)
 
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
-CREATE TABLE IF NOT EXISTS events (
+CREATE TABLE IF NOT EXISTS codex_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_hash TEXT NOT NULL UNIQUE,
+  observed_ns INTEGER,
+  observed_at TEXT,
+  received_at TEXT NOT NULL,
+  event_name TEXT NOT NULL,
+  event_kind TEXT,
+  service_name TEXT,
+  project_name TEXT,
+  project_path TEXT,
+  model TEXT,
+  slug TEXT,
+  tool_name TEXT,
+  conversation_id TEXT,
+  originator TEXT,
+  app_version TEXT,
+  auth_mode TEXT,
+  call_id TEXT,
+  duration_ms INTEGER,
+  success TEXT,
+  endpoint TEXT,
+  input_tokens INTEGER,
+  cached_tokens INTEGER,
+  output_tokens INTEGER,
+  reasoning_tokens INTEGER,
+  tool_tokens INTEGER,
+  raw_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_codex_events_observed_ns ON codex_events(observed_ns);
+CREATE INDEX IF NOT EXISTS idx_codex_events_name ON codex_events(event_name);
+CREATE INDEX IF NOT EXISTS idx_codex_events_model ON codex_events(model);
+CREATE INDEX IF NOT EXISTS idx_codex_events_service_name ON codex_events(service_name);
+CREATE INDEX IF NOT EXISTS idx_codex_events_project_name ON codex_events(project_name);
+CREATE INDEX IF NOT EXISTS idx_codex_events_conversation_id ON codex_events(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_codex_events_tool_name ON codex_events(tool_name);
+CREATE TABLE IF NOT EXISTS claude_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   event_hash TEXT NOT NULL UNIQUE,
   observed_ns INTEGER,
@@ -103,7 +201,9 @@ CREATE TABLE IF NOT EXISTS events (
   project_path TEXT,
   model TEXT,
   tool_name TEXT,
-  conversation_id TEXT,
+  tool_use_id TEXT,
+  mcp_tool_name TEXT,
+  mcp_server_name TEXT,
   session_id TEXT,
   prompt_id TEXT,
   request_id TEXT,
@@ -118,31 +218,94 @@ CREATE TABLE IF NOT EXISTS events (
   reasoning_tokens INTEGER,
   tool_tokens INTEGER,
   cost_usd REAL,
+  speed REAL,
+  prompt_length INTEGER,
+  response_length INTEGER,
   raw_json TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_events_observed_ns ON events(observed_ns);
-CREATE INDEX IF NOT EXISTS idx_events_name ON events(event_name);
-CREATE INDEX IF NOT EXISTS idx_events_model ON events(model);
-CREATE INDEX IF NOT EXISTS idx_events_service_name ON events(service_name);
-CREATE INDEX IF NOT EXISTS idx_events_project_name ON events(project_name);
-CREATE INDEX IF NOT EXISTS idx_events_tool_name ON events(tool_name);
+CREATE INDEX IF NOT EXISTS idx_claude_events_observed_ns ON claude_events(observed_ns);
+CREATE INDEX IF NOT EXISTS idx_claude_events_name ON claude_events(event_name);
+CREATE INDEX IF NOT EXISTS idx_claude_events_model ON claude_events(model);
+CREATE INDEX IF NOT EXISTS idx_claude_events_service_name ON claude_events(service_name);
+CREATE INDEX IF NOT EXISTS idx_claude_events_project_name ON claude_events(project_name);
+CREATE INDEX IF NOT EXISTS idx_claude_events_session_id ON claude_events(session_id);
+CREATE INDEX IF NOT EXISTS idx_claude_events_tool_name ON claude_events(tool_name);
 CREATE TABLE IF NOT EXISTS app_state (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+DROP VIEW IF EXISTS dashboard_events;
+CREATE VIEW dashboard_events AS
+  SELECT
+    'codex:' || id AS id,
+    id AS source_id,
+    'codex' AS producer_table,
+    event_hash,
+    observed_ns,
+    observed_at,
+    received_at,
+    event_name,
+    event_kind,
+    service_name,
+    project_name,
+    project_path,
+    model,
+    tool_name,
+    conversation_id AS session_key,
+    'conversation.id' AS session_key_source,
+    conversation_id,
+    NULL AS session_id,
+    NULL AS prompt_id,
+    NULL AS request_id,
+    NULL AS event_sequence,
+    duration_ms,
+    success,
+    endpoint,
+    input_tokens,
+    cached_tokens,
+    NULL AS cache_write_tokens,
+    output_tokens,
+    reasoning_tokens,
+    tool_tokens,
+    NULL AS cost_usd,
+    raw_json
+  FROM codex_events
+  UNION ALL
+  SELECT
+    'claude:' || id AS id,
+    id AS source_id,
+    'claude' AS producer_table,
+    event_hash,
+    observed_ns,
+    observed_at,
+    received_at,
+    event_name,
+    event_kind,
+    service_name,
+    project_name,
+    project_path,
+    model,
+    tool_name,
+    session_id AS session_key,
+    'session.id' AS session_key_source,
+    NULL AS conversation_id,
+    session_id,
+    prompt_id,
+    request_id,
+    event_sequence,
+    duration_ms,
+    success,
+    endpoint,
+    input_tokens,
+    cached_tokens,
+    cache_write_tokens,
+    output_tokens,
+    reasoning_tokens,
+    tool_tokens,
+    cost_usd,
+    raw_json
+  FROM claude_events;
 """
-
-EVENT_COLUMN_MIGRATIONS = {
-    "project_name": "ALTER TABLE events ADD COLUMN project_name TEXT",
-    "project_path": "ALTER TABLE events ADD COLUMN project_path TEXT",
-    "tool_name": "ALTER TABLE events ADD COLUMN tool_name TEXT",
-    "cache_write_tokens": "ALTER TABLE events ADD COLUMN cache_write_tokens INTEGER",
-    "cost_usd": "ALTER TABLE events ADD COLUMN cost_usd REAL",
-    "session_id": "ALTER TABLE events ADD COLUMN session_id TEXT",
-    "prompt_id": "ALTER TABLE events ADD COLUMN prompt_id TEXT",
-    "request_id": "ALTER TABLE events ADD COLUMN request_id TEXT",
-    "event_sequence": "ALTER TABLE events ADD COLUMN event_sequence INTEGER",
-}
 
 
 def utc_now_iso() -> str:
@@ -179,6 +342,15 @@ def int_or_none(value: Any) -> int | None:
         return None
     try:
         return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def float_or_none(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return None
 
@@ -226,6 +398,30 @@ def first_attr(attrs: dict[str, Any], keys: tuple[str, ...]) -> Any:
         if value not in (None, ""):
             return value
     return None
+
+
+def producer_kind(service_name: str | None) -> str | None:
+    if service_name in CODEX_SERVICE_NAMES:
+        return "codex"
+    if service_name == "claude-code":
+        return "claude"
+    return None
+
+
+def table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (name,),
+        ).fetchone()
+        is not None
+    )
+
+
+def row_get(row: sqlite3.Row | dict[str, Any], key: str, default: Any = None) -> Any:
+    if isinstance(row, sqlite3.Row):
+        return row[key] if key in row.keys() else default
+    return row.get(key, default)
 
 
 class LocalProjectLookup:
@@ -420,6 +616,7 @@ def flatten_payload(line: str, line_no: int) -> list[dict[str, Any]]:
     for resource_idx, resource_log in enumerate(root.get("resourceLogs", [])):
         resource_attrs = attrs_to_dict(resource_log.get("resource", {}).get("attributes", []))
         service_name = string_or_none(resource_attrs.get("service.name"))
+        producer_table = producer_kind(service_name)
         for scope_idx, scope_log in enumerate(resource_log.get("scopeLogs", [])):
             scope = scope_log.get("scope", {})
             for record_idx, record in enumerate(scope_log.get("logRecords", [])):
@@ -450,7 +647,7 @@ def flatten_payload(line: str, line_no: int) -> list[dict[str, Any]]:
                     record_attrs.get("cache_creation_tokens")
                     or record_attrs.get("cache_write_tokens")
                 )
-                if service_name in CODEX_SERVICE_NAMES and input_tokens is not None and cached_tokens:
+                if producer_table == "codex" and input_tokens is not None and cached_tokens:
                     input_tokens = max(input_tokens - cached_tokens, 0)
                 raw = {
                     "resource": resource_attrs,
@@ -460,6 +657,7 @@ def flatten_payload(line: str, line_no: int) -> list[dict[str, Any]]:
                 events.append(
                     {
                         "event_hash": event_hash,
+                        "producer_table": producer_table,
                         "observed_ns": observed_ns,
                         "observed_at": ns_to_iso(observed_ns) if observed_ns else None,
                         "received_at": utc_now_iso(),
@@ -469,13 +667,31 @@ def flatten_payload(line: str, line_no: int) -> list[dict[str, Any]]:
                         "project_name": project_name,
                         "project_path": project_path,
                         "model": string_or_none(record_attrs.get("model") or record_attrs.get("slug")),
+                        "slug": string_or_none(record_attrs.get("slug")),
                         "tool_name": string_or_none(first_attr(record_attrs, TOOL_NAME_KEYS)),
+                        "tool_use_id": string_or_none(record_attrs.get("tool_use_id")),
+                        "mcp_tool_name": string_or_none(record_attrs.get("mcp.tool.name")),
+                        "mcp_server_name": string_or_none(record_attrs.get("mcp.server.name")),
                         "conversation_id": string_or_none(record_attrs.get("conversation.id")),
+                        "originator": string_or_none(record_attrs.get("originator")),
+                        "app_version": string_or_none(
+                            record_attrs.get("app.version") or record_attrs.get("app_version")
+                        ),
+                        "auth_mode": string_or_none(
+                            record_attrs.get("auth_mode") or record_attrs.get("auth.mode")
+                        ),
+                        "call_id": string_or_none(
+                            record_attrs.get("call_id") or record_attrs.get("call.id")
+                        ),
                         "session_id": string_or_none(record_attrs.get("session.id")),
                         "prompt_id": string_or_none(record_attrs.get("prompt.id")),
-                        "request_id": string_or_none(record_attrs.get("request_id")),
+                        "request_id": string_or_none(
+                            record_attrs.get("request_id") or record_attrs.get("request.id")
+                        ),
                         "event_sequence": int_or_none(record_attrs.get("event.sequence")),
-                        "duration_ms": int_or_none(record_attrs.get("duration_ms")),
+                        "duration_ms": int_or_none(
+                            record_attrs.get("duration_ms") or record_attrs.get("duration.ms")
+                        ),
                         "success": string_or_none(record_attrs.get("success")),
                         "endpoint": string_or_none(record_attrs.get("endpoint")),
                         "input_tokens": input_tokens,
@@ -487,6 +703,9 @@ def flatten_payload(line: str, line_no: int) -> list[dict[str, Any]]:
                         "reasoning_tokens": int_or_none(record_attrs.get("reasoning_token_count")),
                         "tool_tokens": int_or_none(record_attrs.get("tool_token_count")),
                         "cost_usd": cost_usd_from_attrs(record_attrs),
+                        "speed": float_or_none(record_attrs.get("speed")),
+                        "prompt_length": int_or_none(record_attrs.get("prompt_length")),
+                        "response_length": int_or_none(record_attrs.get("response_length")),
                         "raw_json": public_raw_json(raw),
                     }
                 )
@@ -497,36 +716,112 @@ def init_db(db_path: pathlib.Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as conn:
         conn.executescript(SCHEMA)
-        columns = {
-            row[1]
-            for row in conn.execute("PRAGMA table_info(events)").fetchall()
-        }
-        for column, statement in EVENT_COLUMN_MIGRATIONS.items():
-            if column not in columns:
-                conn.execute(statement)
-        conn.executescript(
-            """
-            CREATE INDEX IF NOT EXISTS idx_events_project_name ON events(project_name);
-            CREATE INDEX IF NOT EXISTS idx_events_tool_name ON events(tool_name);
-            """
-        )
+
+
+def insert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> tuple[str, int] | None:
+    producer_table = event.get("producer_table") or producer_kind(event.get("service_name"))
+    if producer_table == "codex":
+        columns = CODEX_EVENT_COLUMNS
+        table = "codex_events"
+    elif producer_table == "claude":
+        columns = CLAUDE_EVENT_COLUMNS
+        table = "claude_events"
+    else:
+        return None
+
+    placeholders = ",".join("?" for _ in columns)
+    column_sql = ",".join(columns)
+    cursor = conn.execute(
+        f"INSERT OR IGNORE INTO {table} ({column_sql}) VALUES ({placeholders})",
+        tuple(event.get(column) for column in columns),
+    )
+    if not cursor.rowcount:
+        return None
+    return producer_table, int(cursor.lastrowid)
+
+
+def event_from_legacy_row(row: sqlite3.Row) -> dict[str, Any] | None:
+    service_name = string_or_none(row_get(row, "service_name"))
+    producer_table = producer_kind(service_name)
+    if producer_table is None:
+        return None
+
+    attrs = attrs_from_stored_raw(row_get(row, "raw_json"))
+    event = {
+        "producer_table": producer_table,
+        "event_hash": row_get(row, "event_hash"),
+        "observed_ns": row_get(row, "observed_ns"),
+        "observed_at": row_get(row, "observed_at"),
+        "received_at": row_get(row, "received_at") or utc_now_iso(),
+        "event_name": row_get(row, "event_name") or "unknown",
+        "event_kind": row_get(row, "event_kind"),
+        "service_name": service_name,
+        "project_name": row_get(row, "project_name"),
+        "project_path": row_get(row, "project_path"),
+        "model": row_get(row, "model") or string_or_none(attrs.get("model") or attrs.get("slug")),
+        "slug": string_or_none(attrs.get("slug")),
+        "tool_name": row_get(row, "tool_name") or string_or_none(first_attr(attrs, TOOL_NAME_KEYS)),
+        "tool_use_id": string_or_none(attrs.get("tool_use_id")),
+        "mcp_tool_name": string_or_none(attrs.get("mcp.tool.name")),
+        "mcp_server_name": string_or_none(attrs.get("mcp.server.name")),
+        "conversation_id": row_get(row, "conversation_id")
+        or string_or_none(attrs.get("conversation.id")),
+        "originator": string_or_none(attrs.get("originator")),
+        "app_version": string_or_none(attrs.get("app.version") or attrs.get("app_version")),
+        "auth_mode": string_or_none(attrs.get("auth_mode") or attrs.get("auth.mode")),
+        "call_id": string_or_none(attrs.get("call_id") or attrs.get("call.id")),
+        "session_id": row_get(row, "session_id") or string_or_none(attrs.get("session.id")),
+        "prompt_id": row_get(row, "prompt_id") or string_or_none(attrs.get("prompt.id")),
+        "request_id": row_get(row, "request_id")
+        or string_or_none(attrs.get("request_id") or attrs.get("request.id")),
+        "event_sequence": row_get(row, "event_sequence")
+        or int_or_none(attrs.get("event.sequence")),
+        "duration_ms": row_get(row, "duration_ms"),
+        "success": row_get(row, "success"),
+        "endpoint": row_get(row, "endpoint"),
+        "input_tokens": row_get(row, "input_tokens"),
+        "cached_tokens": row_get(row, "cached_tokens"),
+        "cache_write_tokens": row_get(row, "cache_write_tokens"),
+        "output_tokens": row_get(row, "output_tokens"),
+        "reasoning_tokens": row_get(row, "reasoning_tokens"),
+        "tool_tokens": row_get(row, "tool_tokens"),
+        "cost_usd": row_get(row, "cost_usd"),
+        "speed": float_or_none(attrs.get("speed")),
+        "prompt_length": int_or_none(attrs.get("prompt_length")),
+        "response_length": int_or_none(attrs.get("response_length")),
+        "raw_json": row_get(row, "raw_json"),
+    }
+    return event
+
+
+def migrate_legacy_events_to_producer_tables(db_path: pathlib.Path) -> int:
+    updated = 0
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        if not table_exists(conn, "events"):
+            return 0
+        rows = conn.execute("SELECT * FROM events").fetchall()
+        for row in rows:
+            event = event_from_legacy_row(row)
+            if event is None:
+                continue
+            if insert_event(conn, event):
+                updated += 1
+        conn.commit()
+    return updated
 
 
 def backfill_codex_projects(db_path: pathlib.Path) -> int:
-    services = tuple(sorted(CODEX_SERVICE_NAMES))
-    placeholders = ",".join("?" for _ in services)
     updated = 0
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            f"""
+            """
             SELECT id, service_name, project_name, project_path, conversation_id, observed_ns, raw_json
-            FROM events
-            WHERE service_name IN ({placeholders})
-              AND conversation_id IS NOT NULL
+            FROM codex_events
+            WHERE conversation_id IS NOT NULL
               AND conversation_id != ''
             """,
-            services,
         ).fetchall()
         for row in rows:
             project_name, project_path = PROJECT_LOOKUP.lookup(
@@ -547,7 +842,7 @@ def backfill_codex_projects(db_path: pathlib.Path) -> int:
                 continue
             conn.execute(
                 """
-                UPDATE events
+                UPDATE codex_events
                 SET project_name = ?, project_path = ?
                 WHERE id = ?
                 """,
@@ -562,15 +857,16 @@ def migrate_project_aliases(db_path: pathlib.Path) -> int:
     updated = 0
     with sqlite3.connect(db_path) as conn:
         for old_project, (project_name, project_path) in PROJECT_ALIASES.items():
-            cursor = conn.execute(
-                """
-                UPDATE events
-                SET project_name = ?, project_path = ?
-                WHERE project_name = ?
-                """,
-                (project_name, project_path, old_project),
-            )
-            updated += cursor.rowcount
+            for table in ("codex_events", "claude_events"):
+                cursor = conn.execute(
+                    f"""
+                    UPDATE {table}
+                    SET project_name = ?, project_path = ?
+                    WHERE project_name = ?
+                    """,
+                    (project_name, project_path, old_project),
+                )
+                updated += cursor.rowcount
         conn.commit()
     return updated
 
@@ -588,13 +884,25 @@ def backfill_conversation_projects(db_path: pathlib.Path) -> int:
 
 
 def backfill_conversation_projects_conn(conn: sqlite3.Connection) -> int:
+    return backfill_project_groups_conn(conn, "codex_events", "conversation_id") + backfill_project_groups_conn(
+        conn,
+        "claude_events",
+        "session_id",
+    )
+
+
+def backfill_project_groups_conn(
+    conn: sqlite3.Connection,
+    table: str,
+    key_column: str,
+) -> int:
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        """
-        SELECT service_name, conversation_id, project_name, project_path
-        FROM events
-        WHERE conversation_id IS NOT NULL
-          AND conversation_id != ''
+        f"""
+        SELECT service_name, {key_column} AS session_key, project_name, project_path
+        FROM {table}
+        WHERE {key_column} IS NOT NULL
+          AND {key_column} != ''
           AND project_name IS NOT NULL
           AND project_name != ''
         """
@@ -605,7 +913,7 @@ def backfill_conversation_projects_conn(conn: sqlite3.Connection) -> int:
         project_name = string_or_none(row["project_name"])
         if not is_concrete_project(project_name):
             continue
-        key = (string_or_none(row["service_name"]) or "", row["conversation_id"])
+        key = (string_or_none(row["service_name"]) or "", row["session_key"])
         candidate = candidates.setdefault(key, {"names": set(), "paths": set()})
         candidate["names"].add(project_name)
         project_path = string_or_none(row["project_path"])
@@ -613,24 +921,24 @@ def backfill_conversation_projects_conn(conn: sqlite3.Connection) -> int:
             candidate["paths"].add(project_path)
 
     updated = 0
-    for (service_name, conversation_id), candidate in candidates.items():
+    for (service_name, session_key), candidate in candidates.items():
         if len(candidate["names"]) != 1 or len(candidate["paths"]) > 1:
             continue
         project_name = next(iter(candidate["names"]))
         project_path = next(iter(candidate["paths"])) if candidate["paths"] else None
         cursor = conn.execute(
             f"""
-            UPDATE events
+            UPDATE {table}
             SET project_name = ?, project_path = ?
             WHERE COALESCE(service_name, '') = ?
-              AND conversation_id = ?
+              AND {key_column} = ?
               AND (
                 project_name IS NULL
                 OR project_name = ''
                 OR project_name IN ({",".join("?" for _ in DERIVED_PROJECT_NAMES)})
               )
             """,
-            (project_name, project_path, service_name, conversation_id, *DERIVED_PROJECT_NAMES),
+            (project_name, project_path, service_name, session_key, *DERIVED_PROJECT_NAMES),
         )
         updated += cursor.rowcount
     return updated
@@ -645,14 +953,14 @@ def attrs_from_stored_raw(raw_json: str | None) -> dict[str, Any]:
     return {}
 
 
-def backfill_event_metadata(db_path: pathlib.Path) -> int:
+def backfill_claude_metadata(db_path: pathlib.Path) -> int:
     updated = 0
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
             SELECT id, session_id, prompt_id, request_id, event_sequence, raw_json
-            FROM events
+            FROM claude_events
             WHERE session_id IS NULL
                OR prompt_id IS NULL
                OR request_id IS NULL
@@ -663,7 +971,9 @@ def backfill_event_metadata(db_path: pathlib.Path) -> int:
             attrs = attrs_from_stored_raw(row["raw_json"])
             session_id = row["session_id"] or string_or_none(attrs.get("session.id"))
             prompt_id = row["prompt_id"] or string_or_none(attrs.get("prompt.id"))
-            request_id = row["request_id"] or string_or_none(attrs.get("request_id"))
+            request_id = row["request_id"] or string_or_none(
+                attrs.get("request_id") or attrs.get("request.id")
+            )
             event_sequence = row["event_sequence"] or int_or_none(attrs.get("event.sequence"))
             if (
                 row["session_id"] == session_id
@@ -674,7 +984,7 @@ def backfill_event_metadata(db_path: pathlib.Path) -> int:
                 continue
             conn.execute(
                 """
-                UPDATE events
+                UPDATE claude_events
                 SET session_id = ?, prompt_id = ?, request_id = ?, event_sequence = ?
                 WHERE id = ?
                 """,
@@ -692,6 +1002,7 @@ def event_row_to_dict(row: sqlite3.Row, include_raw: bool = False) -> dict[str, 
     event["short_conversation_id"] = (
         event["conversation_id"][:8] if event.get("conversation_id") else None
     )
+    event["short_session_key"] = event["session_key"][:8] if event.get("session_key") else None
     event["total_tokens"] = token_total(event)
     if "cache_read_display_tokens" in event:
         event["display_total_tokens"] = (
@@ -781,7 +1092,6 @@ class OTelTailer(threading.Thread):
             conn.close()
 
     def _run(self, conn: sqlite3.Connection) -> None:
-        line_no = 0
         while not self.stop_event.is_set():
             if not self.source.exists():
                 self.set_status(source_exists=False, last_error="source file is missing")
@@ -790,6 +1100,7 @@ class OTelTailer(threading.Thread):
 
             try:
                 with self.source.open("r", encoding="utf-8") as handle:
+                    line_no = 0
                     self.set_status(source_exists=True, last_error=None, position=0)
                     while not self.stop_event.is_set():
                         line = handle.readline()
@@ -816,66 +1127,27 @@ class OTelTailer(threading.Thread):
             self.set_status(last_error=f"JSONDecodeError: {exc}")
             return
 
-        inserted_events: list[dict[str, Any]] = []
+        inserted_event_ids: list[str] = []
         for event in events:
-            values = (
-                event["event_hash"],
-                event["observed_ns"],
-                event["observed_at"],
-                event["received_at"],
-                event["event_name"],
-                event["event_kind"],
-                event["service_name"],
-                event["project_name"],
-                event["project_path"],
-                event["model"],
-                event["tool_name"],
-                event["conversation_id"],
-                event["session_id"],
-                event["prompt_id"],
-                event["request_id"],
-                event["event_sequence"],
-                event["duration_ms"],
-                event["success"],
-                event["endpoint"],
-                event["input_tokens"],
-                event["cached_tokens"],
-                event["cache_write_tokens"],
-                event["output_tokens"],
-                event["reasoning_tokens"],
-                event["tool_tokens"],
-                event["cost_usd"],
-                event["raw_json"],
-            )
-            cursor = conn.execute(
-                """
-                INSERT OR IGNORE INTO events (
-                  event_hash, observed_ns, observed_at, received_at, event_name, event_kind,
-                  service_name, project_name, project_path, model, tool_name, conversation_id,
-                  session_id, prompt_id, request_id, event_sequence,
-                  duration_ms, success, endpoint, input_tokens, cached_tokens, cache_write_tokens,
-                  output_tokens, reasoning_tokens, tool_tokens, cost_usd,
-                  raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                values,
-            )
-            if cursor.rowcount:
-                event_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-                stored = dict(event)
-                stored["id"] = event_id
-                stored["short_conversation_id"] = (
-                    stored["conversation_id"][:8] if stored.get("conversation_id") else None
-                )
-                inserted_events.append(stored)
+            inserted = insert_event(conn, event)
+            if inserted:
+                producer_table, source_id = inserted
+                inserted_event_ids.append(f"{producer_table}:{source_id}")
         conn.commit()
 
-        if inserted_events:
-            if any(event.get("conversation_id") for event in inserted_events):
-                conversation_updates = backfill_conversation_projects_conn(conn)
-                if conversation_updates:
-                    conn.commit()
-            inserted_count = len(inserted_events)
+        if inserted_event_ids:
+            conversation_updates = backfill_conversation_projects_conn(conn)
+            if conversation_updates:
+                conn.commit()
+            inserted_events = [
+                conn.execute(
+                    "SELECT * FROM dashboard_events WHERE id = ?",
+                    (event_id,),
+                ).fetchone()
+                for event_id in inserted_event_ids
+            ]
+            inserted_events = [event for event in inserted_events if event is not None]
+            inserted_count = len(inserted_event_ids)
             status = self.status()
             self.set_status(
                 inserted=status.get("inserted", 0) + inserted_count,
@@ -883,17 +1155,18 @@ class OTelTailer(threading.Thread):
                 last_error=None,
             )
             for event in inserted_events:
-                self.hub.publish({"type": "event", "event": event_row_to_dict(event)})
-                if is_call_event(event):
-                    self.hub.publish({"type": "call", "call": event_row_to_dict(event)})
+                event_payload = event_row_to_dict(event)
+                self.hub.publish({"type": "event", "event": event_payload})
+                if is_call_event(event_payload):
+                    self.hub.publish({"type": "call", "call": event_payload})
             self.hub.publish({"type": "summary", "summary": make_summary(self.db_path, self.status())})
 
 
 def query_recent(conn: sqlite3.Connection, limit: int = 250) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
-        SELECT * FROM events
-        ORDER BY COALESCE(observed_ns, 0) DESC, id DESC
+        SELECT * FROM dashboard_events
+        ORDER BY COALESCE(observed_ns, 0) DESC, producer_table DESC, source_id DESC
         LIMIT ?
         """,
         (limit,),
@@ -905,11 +1178,11 @@ def query_calls(conn: sqlite3.Connection, limit: int = 250) -> list[dict[str, An
     token_expr = token_total_sql()
     rows = conn.execute(
         f"""
-        SELECT * FROM events
+        SELECT * FROM dashboard_events
         WHERE event_name IN ({",".join("?" for _ in CALL_EVENT_NAMES)})
            OR ({token_expr}) > 0
            OR COALESCE(tool_tokens, 0) > 0
-        ORDER BY COALESCE(observed_ns, 0) DESC, id DESC
+        ORDER BY COALESCE(observed_ns, 0) DESC, producer_table DESC, source_id DESC
         LIMIT ?
         """,
         (*sorted(CALL_EVENT_NAMES), limit),
@@ -917,8 +1190,8 @@ def query_calls(conn: sqlite3.Connection, limit: int = 250) -> list[dict[str, An
     return [event_row_to_dict(row) for row in reversed(rows)]
 
 
-def query_event_detail(conn: sqlite3.Connection, event_id: int) -> dict[str, Any] | None:
-    row = conn.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
+def query_event_detail(conn: sqlite3.Connection, event_id: str) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM dashboard_events WHERE id = ?", (event_id,)).fetchone()
     return event_row_to_dict(row, include_raw=True) if row else None
 
 
@@ -942,7 +1215,7 @@ def query_counts(conn: sqlite3.Connection, interval_minutes: int) -> dict[str, i
           COALESCE(SUM(output_tokens), 0) AS output_tokens,
           COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
           COALESCE(SUM(tool_tokens), 0) AS tool_tokens
-        FROM events
+        FROM dashboard_events
         WHERE observed_ns >= ?
         """,
         (since_ns,),
@@ -956,7 +1229,7 @@ def query_top(conn: sqlite3.Connection, column: str, limit: int = 8) -> list[dic
     rows = conn.execute(
         f"""
         SELECT {column} AS name, COUNT(*) AS count
-        FROM events
+        FROM dashboard_events
         WHERE {column} IS NOT NULL AND {column} != ''
         GROUP BY {column}
         ORDER BY count DESC, name ASC
@@ -993,7 +1266,7 @@ def query_usage_by_dimension(
           COALESCE(SUM(duration_ms), 0) AS duration_ms,
           COALESCE(SUM(cost_usd), 0.0) AS cost_usd,
           ({token_sum_expr}) AS total_tokens
-        FROM events
+        FROM dashboard_events
         WHERE {where_sql}
         GROUP BY {dimension}
         ORDER BY total_tokens DESC, calls DESC, events DESC, name ASC
@@ -1092,7 +1365,7 @@ def query_usage_report(
           COALESCE(SUM(tool_tokens), 0) AS tool_tokens,
           COALESCE(SUM(duration_ms), 0) AS duration_ms,
           COALESCE(SUM(cost_usd), 0.0) AS cost_usd
-        FROM events
+        FROM dashboard_events
         WHERE {" AND ".join(clauses)}
         GROUP BY day, project_name, model
         ORDER BY day DESC, project_name ASC
@@ -1192,7 +1465,7 @@ def query_report_calls(
         f"""
         WITH eligible AS (
           SELECT *
-          FROM events
+          FROM dashboard_events
           WHERE ({token_expr}) > 0 OR COALESCE(tool_tokens, 0) > 0
         ),
         measured AS (
@@ -1202,7 +1475,7 @@ def query_report_calls(
               SELECT prev.cached_tokens
               FROM eligible AS prev
               WHERE prev.service_name = eligible.service_name
-                AND COALESCE(prev.session_id, '') = COALESCE(eligible.session_id, '')
+                AND COALESCE(prev.session_key, '') = COALESCE(eligible.session_key, '')
                 AND COALESCE(prev.project_path, prev.project_name, '') =
                   COALESCE(eligible.project_path, eligible.project_name, '')
                 AND COALESCE(prev.model, '') = COALESCE(eligible.model, '')
@@ -1212,10 +1485,10 @@ def query_report_calls(
                   COALESCE(prev.observed_ns, 0) < COALESCE(eligible.observed_ns, 0)
                   OR (
                     COALESCE(prev.observed_ns, 0) = COALESCE(eligible.observed_ns, 0)
-                    AND prev.id < eligible.id
+                    AND prev.source_id < eligible.source_id
                   )
                 )
-              ORDER BY COALESCE(prev.observed_ns, 0) DESC, prev.id DESC
+              ORDER BY COALESCE(prev.observed_ns, 0) DESC, prev.source_id DESC
               LIMIT 1
             ) AS previous_cached_tokens
           FROM eligible
@@ -1237,7 +1510,7 @@ def query_report_calls(
           END AS cache_read_display_tokens
         FROM measured
         WHERE {" AND ".join(clauses)}
-        ORDER BY COALESCE(observed_ns, 0) DESC, id DESC
+        ORDER BY COALESCE(observed_ns, 0) DESC, producer_table DESC, source_id DESC
         LIMIT ?
         """,
         params,
@@ -1266,7 +1539,7 @@ def query_timeline(conn: sqlite3.Connection, minutes: int = 45) -> list[dict[str
           COUNT(*) AS events,
           COALESCE(SUM(input_tokens), 0) AS input_tokens,
           COALESCE(SUM(output_tokens), 0) AS output_tokens
-        FROM events
+        FROM dashboard_events
         WHERE observed_ns >= ?
         GROUP BY bucket
         ORDER BY bucket ASC
@@ -1285,12 +1558,12 @@ def query_timeline(conn: sqlite3.Connection, minutes: int = 45) -> list[dict[str
 def make_summary(db_path: pathlib.Path, tail_status: dict[str, Any]) -> dict[str, Any]:
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        total = conn.execute("SELECT COUNT(*) AS count FROM events").fetchone()["count"]
+        total = conn.execute("SELECT COUNT(*) AS count FROM dashboard_events").fetchone()["count"]
         last = conn.execute(
             """
             SELECT observed_at, event_name, service_name, model
-            FROM events
-            ORDER BY COALESCE(observed_ns, 0) DESC, id DESC
+            FROM dashboard_events
+            ORDER BY COALESCE(observed_ns, 0) DESC, producer_table DESC, source_id DESC
             LIMIT 1
             """
         ).fetchone()
@@ -1304,14 +1577,14 @@ def make_summary(db_path: pathlib.Path, tail_status: dict[str, Any]) -> dict[str
               COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
               COALESCE(SUM(tool_tokens), 0) AS tool_tokens,
               COALESCE(SUM(cost_usd), 0.0) AS cost_usd
-            FROM events
+            FROM dashboard_events
             """
         ).fetchone()
         token_expr = token_total_sql()
         call_count = conn.execute(
             f"""
             SELECT COUNT(*) AS count
-            FROM events
+            FROM dashboard_events
             WHERE event_name IN ({",".join("?" for _ in CALL_EVENT_NAMES)})
                OR ({token_expr}) > 0
                OR COALESCE(tool_tokens, 0) > 0
@@ -1449,9 +1722,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def respond_event_detail(self, parsed: urllib.parse.ParseResult) -> None:
         params = urllib.parse.parse_qs(parsed.query)
-        try:
-            event_id = int(params.get("id", [""])[0])
-        except (TypeError, ValueError):
+        event_id = params.get("id", [""])[0]
+        if not event_id:
             self.send_error(HTTPStatus.BAD_REQUEST, "missing or invalid id")
             return
         with sqlite3.connect(self.server.db_path) as conn:
@@ -1528,7 +1800,8 @@ def main() -> int:
     source_path = args.source.expanduser()
     db_path = args.db.expanduser()
     init_db(db_path)
-    metadata_backfilled = backfill_event_metadata(db_path)
+    migrated = migrate_legacy_events_to_producer_tables(db_path)
+    metadata_backfilled = backfill_claude_metadata(db_path)
     backfilled = backfill_codex_projects(db_path)
     aliased = migrate_project_aliases(db_path)
     conversation_backfilled = backfill_conversation_projects(db_path)
@@ -1554,8 +1827,10 @@ def main() -> int:
     print(f"NOPEntel: http://{args.host}:{args.port}")
     print(f"Source: {source_path}")
     print(f"SQLite: {db_path}")
+    if migrated:
+        print(f"Migrated legacy events into producer tables: {migrated}")
     if metadata_backfilled:
-        print(f"Backfilled request metadata for {metadata_backfilled} events")
+        print(f"Backfilled Claude request metadata for {metadata_backfilled} events")
     if backfilled:
         print(f"Backfilled Codex project attribution for {backfilled} events")
     if aliased:

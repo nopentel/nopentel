@@ -40,6 +40,7 @@ const els = {
 const serviceLabels = new Map([
   ["codex_exec", "Codex"],
   ["codex_cli_rs", "Codex"],
+  ["codex-app-server", "Codex"],
   ["claude-code", "Claude Code"],
 ]);
 
@@ -363,7 +364,7 @@ function renderCalls(calls) {
 async function selectCall(id) {
   state.selectedCallId = id;
   for (const row of els.drillRows.querySelectorAll("tr")) {
-    row.classList.toggle("selected", Number(row.dataset.id) === id);
+    row.classList.toggle("selected", row.dataset.id === String(id));
   }
   const base = state.callsById.get(id) || {};
   renderInspector(base, true);
@@ -400,8 +401,16 @@ function renderInspector(event, loading = false) {
     makeMetaValue(event.event_name),
     makeMetaTerm("Request ID"),
     makeMetaValue(event.request_id),
-    makeMetaTerm("Session ID"),
-    makeMetaValue(event.session_id),
+    makeMetaTerm("Session"),
+    makeMetaValue(
+      event.short_session_key
+        || event.session_key
+        || event.short_conversation_id
+        || event.conversation_id
+        || event.session_id,
+    ),
+    makeMetaTerm("Session Source"),
+    makeMetaValue(event.session_key_source),
     makeMetaTerm("Prompt ID"),
     makeMetaValue(event.prompt_id),
     makeMetaTerm("Conversation"),

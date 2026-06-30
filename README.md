@@ -3,8 +3,10 @@
 NOPEntel is a small local web app for watching OpenTelemetry-like agent
 telemetry in real time.
 
-The app tails the local collector JSONL file, stores flattened events in SQLite,
-and streams updates to the browser with Server-Sent Events.
+The app tails the local collector JSONL file, stores producer-owned events in
+SQLite, and streams updates to the browser with Server-Sent Events. Codex data
+goes into `codex_events`, Claude Code data goes into `claude_events`, and the
+minimal dashboard reads from a `dashboard_events` projection.
 
 The current known local producers are:
 
@@ -44,6 +46,9 @@ Defaults:
   telemetry object and fetches it only when you click a specific event or call.
 - Prompt, response, and tool payloads are intentionally inspectable in the
   click-through object detail view.
+- Producer tables are intentionally separate. A new producer should get its own
+  table and then opt into the dashboard projection instead of changing the
+  Codex or Claude table shape.
 - Codex Desktop chats that have no project/cwd session metadata are shown as
   `Codex App Chat` instead of `(unknown project)`.
 - Codex auto-review child sessions that have no project/cwd session metadata
