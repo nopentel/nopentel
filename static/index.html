@@ -57,28 +57,37 @@
           <button id="clearDrill" type="button">Clear</button>
         </div>
         <div class="drill-grid">
-          <div class="drill-table-wrap">
-            <table class="calls-table">
-              <thead>
-                <tr>
-                  <th scope="col">Time</th>
-                  <th scope="col">Source</th>
-                  <th scope="col">Project</th>
-                  <th scope="col">Model</th>
-                  <th scope="col">Event</th>
-                  <th scope="col">Input</th>
-                  <th scope="col">Output</th>
-                  <th scope="col">Cache Create</th>
-                  <th scope="col">Cache Read Δ</th>
-                  <th scope="col">Total Δ</th>
-                </tr>
-              </thead>
-              <tbody id="drillRows"></tbody>
-            </table>
+          <div class="drill-main">
+            <div id="eventSummary" class="event-summary"></div>
+            <div id="eventListPanel" class="event-list-panel" hidden>
+              <div class="event-list-heading">
+                <h2 id="eventListTitle">Events</h2>
+                <button id="clearEventType" type="button">Back</button>
+              </div>
+              <div class="drill-table-wrap">
+                <table class="calls-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Time</th>
+                      <th scope="col">Source</th>
+                      <th scope="col">Project</th>
+                      <th scope="col">Model</th>
+                      <th scope="col">Event</th>
+                      <th scope="col">Input</th>
+                      <th scope="col">Output</th>
+                      <th scope="col">Cache Create</th>
+                      <th scope="col">Cache Read Δ</th>
+                      <th scope="col">Total Δ</th>
+                    </tr>
+                  </thead>
+                  <tbody id="drillRows"></tbody>
+                </table>
+              </div>
+            </div>
           </div>
           <aside id="inspector" class="inspector" hidden>
             <div class="inspector-heading">
-              <h2 id="inspectorTitle">Request</h2>
+              <h2 id="inspectorTitle">Event</h2>
               <button id="closeInspector" type="button">Close</button>
             </div>
             <dl id="inspectorMeta" class="inspector-meta"></dl>

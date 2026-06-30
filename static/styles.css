@@ -286,6 +286,107 @@ button:focus {
   gap: 16px;
 }
 
+.drill-main {
+  min-width: 0;
+}
+
+.event-summary {
+  display: grid;
+  gap: 14px;
+}
+
+.event-totals {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+  border: 1px solid var(--line);
+}
+
+.event-total {
+  padding: 12px 14px;
+  border-right: 1px solid var(--line);
+}
+
+.event-total:last-child {
+  border-right: 0;
+}
+
+.event-total-label {
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.event-total-value {
+  margin-top: 4px;
+  color: var(--ink);
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.event-category {
+  border: 1px solid var(--line);
+}
+
+.event-category-title {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--accent);
+  font-size: 15px;
+}
+
+.event-type-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.event-type-button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 6px 12px;
+  min-height: 68px;
+  height: auto;
+  padding: 10px 12px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  text-align: left;
+}
+
+.event-type-button:hover,
+.event-type-button:focus,
+.event-type-button.selected {
+  background: var(--selected);
+}
+
+.event-type-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+}
+
+.event-type-count {
+  color: var(--total);
+}
+
+.event-type-meta {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.event-list-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.event-list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
 .drill-table-wrap {
   overflow-x: auto;
 }
@@ -395,5 +496,17 @@ button:focus {
 
   .filter-bar label {
     width: 100%;
+  }
+
+  .event-totals {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .event-total:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .event-total:nth-child(n + 3) {
+    border-top: 1px solid var(--line);
   }
 }

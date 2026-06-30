@@ -424,6 +424,12 @@ def row_get(row: sqlite3.Row | dict[str, Any], key: str, default: Any = None) ->
     return row.get(key, default)
 
 
+def display_service_label(service_name: str | None) -> str:
+    if not service_name:
+        return "Unknown"
+    return KNOWN_SERVICES.get(service_name, service_name)
+
+
 class LocalProjectLookup:
     def __init__(self) -> None:
         self._cache: dict[tuple[str, str], tuple[str | None, str | None]] = {}
@@ -1004,13 +1010,19 @@ def event_row_to_dict(row: sqlite3.Row, include_raw: bool = False) -> dict[str, 
     )
     event["short_session_key"] = event["session_key"][:8] if event.get("session_key") else None
     event["total_tokens"] = token_total(event)
+    event["has_token_metrics"] = any(
+        event.get(field) is not None for field in (*TOKEN_TOTAL_FIELDS, "tool_tokens")
+    )
     if "cache_read_display_tokens" in event:
-        event["display_total_tokens"] = (
-            (int_or_none(event.get("input_tokens")) or 0)
-            + (int_or_none(event.get("output_tokens")) or 0)
-            + (int_or_none(event.get("cache_write_tokens")) or 0)
-            + (int_or_none(event.get("cache_read_display_tokens")) or 0)
-        )
+        if event["has_token_metrics"]:
+            event["display_total_tokens"] = (
+                (int_or_none(event.get("input_tokens")) or 0)
+                + (int_or_none(event.get("output_tokens")) or 0)
+                + (int_or_none(event.get("cache_write_tokens")) or 0)
+                + (int_or_none(event.get("cache_read_display_tokens")) or 0)
+            )
+        else:
+            event["display_total_tokens"] = None
     return event
 
 
@@ -1329,6 +1341,7 @@ def report_total(row: sqlite3.Row | dict[str, Any]) -> int:
 def make_report_row(row: sqlite3.Row) -> dict[str, Any]:
     item = dict(row)
     item["total_tokens"] = report_total(item)
+    item["source_label"] = display_service_label(item.get("service_name"))
     return item
 
 
@@ -1355,11 +1368,19 @@ def query_usage_report(
           substr(observed_at, 1, 10) AS day,
           COALESCE(NULLIF(project_name, ''), '(unknown project)') AS project_name,
           MAX(project_path) AS project_path,
+          producer_table,
+          service_name,
           COALESCE(NULLIF(model, ''), '(unknown model)') AS model,
           COUNT(*) AS calls,
           COALESCE(SUM(input_tokens), 0) AS input_tokens,
           COALESCE(SUM(output_tokens), 0) AS output_tokens,
-          COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+          CASE
+            WHEN SUM(CASE WHEN cache_write_tokens IS NOT NULL THEN 1 ELSE 0 END) = 0
+            THEN NULL
+            ELSE COALESCE(SUM(cache_write_tokens), 0)
+          END AS cache_write_tokens,
+          SUM(CASE WHEN cache_write_tokens IS NOT NULL THEN 1 ELSE 0 END) AS cache_write_known_rows,
+          SUM(CASE WHEN cache_write_tokens IS NULL THEN 1 ELSE 0 END) AS cache_write_unknown_rows,
           COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
           COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
           COALESCE(SUM(tool_tokens), 0) AS tool_tokens,
@@ -1367,7 +1388,7 @@ def query_usage_report(
           COALESCE(SUM(cost_usd), 0.0) AS cost_usd
         FROM dashboard_events
         WHERE {" AND ".join(clauses)}
-        GROUP BY day, project_name, model
+        GROUP BY day, project_name, producer_table, service_name, model
         ORDER BY day DESC, project_name ASC
         """,
         params,
@@ -1379,6 +1400,8 @@ def query_usage_report(
         "input_tokens": 0,
         "output_tokens": 0,
         "cache_write_tokens": 0,
+        "cache_write_known_rows": 0,
+        "cache_write_unknown_rows": 0,
         "cached_tokens": 0,
         "reasoning_tokens": 0,
         "tool_tokens": 0,
@@ -1400,6 +1423,8 @@ def query_usage_report(
                 "input_tokens": 0,
                 "output_tokens": 0,
                 "cache_write_tokens": 0,
+                "cache_write_known_rows": 0,
+                "cache_write_unknown_rows": 0,
                 "cached_tokens": 0,
                 "reasoning_tokens": 0,
                 "tool_tokens": 0,
@@ -1416,6 +1441,8 @@ def query_usage_report(
             "input_tokens",
             "output_tokens",
             "cache_write_tokens",
+            "cache_write_known_rows",
+            "cache_write_unknown_rows",
             "cached_tokens",
             "reasoning_tokens",
             "tool_tokens",
@@ -1429,7 +1456,13 @@ def query_usage_report(
 
     groups = list(groups_by_key.values())
     for group in groups:
-        group["models"].sort(key=lambda item: (-item["total_tokens"], item["model"]))
+        if row_int(group, "cache_write_known_rows") == 0:
+            group["cache_write_tokens"] = None
+        group["models"].sort(
+            key=lambda item: (-item["total_tokens"], item["source_label"], item["model"])
+        )
+    if row_int(totals, "cache_write_known_rows") == 0:
+        totals["cache_write_tokens"] = None
     groups.sort(key=lambda item: (item["day"], item["project_name"]), reverse=True)
     return {
         "generated_at": utc_now_iso(),
@@ -1443,13 +1476,11 @@ def query_report_calls(
     day: str | None,
     project_name: str | None,
     model: str | None,
-    limit: int = 500,
+    service_name: str | None,
+    limit: int = 5000,
 ) -> list[dict[str, Any]]:
     token_expr = token_total_sql()
-    clauses = [
-        "observed_at IS NOT NULL",
-        f"(({token_expr}) > 0 OR COALESCE(tool_tokens, 0) > 0)",
-    ]
+    clauses = ["observed_at IS NOT NULL"]
     params: list[Any] = []
     if day:
         clauses.append("substr(observed_at, 1, 10) = ?")
@@ -1458,8 +1489,13 @@ def query_report_calls(
         clauses.append("COALESCE(NULLIF(project_name, ''), '(unknown project)') = ?")
         params.append(project_name)
     if model:
-        clauses.append("COALESCE(NULLIF(model, ''), '(unknown model)') = ?")
+        clauses.append(
+            "(COALESCE(NULLIF(model, ''), '(unknown model)') = ? OR model IS NULL OR model = '')"
+        )
         params.append(model)
+    if service_name:
+        clauses.append("service_name = ?")
+        params.append(service_name)
     params.append(limit)
     rows = conn.execute(
         f"""
@@ -1468,30 +1504,35 @@ def query_report_calls(
           FROM dashboard_events
           WHERE ({token_expr}) > 0 OR COALESCE(tool_tokens, 0) > 0
         ),
+        scoped AS (
+          SELECT *
+          FROM dashboard_events
+          WHERE {" AND ".join(clauses)}
+        ),
         measured AS (
           SELECT
-            eligible.*,
+            scoped.*,
             (
               SELECT prev.cached_tokens
               FROM eligible AS prev
-              WHERE prev.service_name = eligible.service_name
-                AND COALESCE(prev.session_key, '') = COALESCE(eligible.session_key, '')
+              WHERE prev.service_name = scoped.service_name
+                AND COALESCE(prev.session_key, '') = COALESCE(scoped.session_key, '')
                 AND COALESCE(prev.project_path, prev.project_name, '') =
-                  COALESCE(eligible.project_path, eligible.project_name, '')
-                AND COALESCE(prev.model, '') = COALESCE(eligible.model, '')
+                  COALESCE(scoped.project_path, scoped.project_name, '')
+                AND COALESCE(prev.model, '') = COALESCE(scoped.model, '')
                 AND prev.cached_tokens IS NOT NULL
                 AND prev.cached_tokens > 0
                 AND (
-                  COALESCE(prev.observed_ns, 0) < COALESCE(eligible.observed_ns, 0)
+                  COALESCE(prev.observed_ns, 0) < COALESCE(scoped.observed_ns, 0)
                   OR (
-                    COALESCE(prev.observed_ns, 0) = COALESCE(eligible.observed_ns, 0)
-                    AND prev.source_id < eligible.source_id
+                    COALESCE(prev.observed_ns, 0) = COALESCE(scoped.observed_ns, 0)
+                    AND prev.source_id < scoped.source_id
                   )
                 )
               ORDER BY COALESCE(prev.observed_ns, 0) DESC, prev.source_id DESC
               LIMIT 1
             ) AS previous_cached_tokens
-          FROM eligible
+          FROM scoped
         )
         SELECT
           measured.*,
@@ -1509,7 +1550,6 @@ def query_report_calls(
             ELSE cached_tokens
           END AS cache_read_display_tokens
         FROM measured
-        WHERE {" AND ".join(clauses)}
         ORDER BY COALESCE(observed_ns, 0) DESC, producer_table DESC, source_id DESC
         LIMIT ?
         """,
@@ -1717,6 +1757,7 @@ class Handler(BaseHTTPRequestHandler):
                     params.get("day", [None])[0],
                     params.get("project", [None])[0],
                     params.get("model", [None])[0],
+                    params.get("service", [None])[0],
                 )
             }
 
